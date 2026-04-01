@@ -418,11 +418,20 @@ with st.sidebar:
 # ══════════════════════════════════════════
 # LOAD DATA
 # ══════════════════════════════════════════
-df_raw = load_macro()
-if df_raw.get("_is_demo", pd.Series([False])).iloc[0] if "_is_demo" in df_raw.columns else False:
-    st.warning("⚠️ Live market data unavailable — showing demo data. Click 🔄 Reload to retry.")
-df = df_raw[(df_raw.index >= pd.Timestamp(d_start)) &
-            (df_raw.index <= pd.Timestamp(d_end))].copy()
+try:
+    df_raw = load_macro()
+    if "_is_demo" in df_raw.columns and bool(df_raw["_is_demo"].iloc[0]):
+        st.warning("⚠️ Live market data unavailable — showing demo data. Click 🔄 Reload to retry.")
+    df = df_raw[(df_raw.index >= pd.Timestamp(d_start)) &
+                (df_raw.index <= pd.Timestamp(d_end))].copy()
+    if df.empty or len(df) < 2:
+        raise ValueError(f"Filtered DataFrame is empty (start={d_start}, end={d_end})")
+except Exception as _startup_err:
+    st.error(f"🚨 Startup error: {_startup_err}")
+    st.code(str(type(_startup_err).__name__), language="text")
+    import traceback
+    st.code(traceback.format_exc(), language="text")
+    st.stop()
 
 # ── SPY benchmark ─────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -441,17 +450,25 @@ def load_spy(start, end):
     except Exception:
         return pd.Series(dtype=float)
 
-spy_rets = load_spy(str(d_start), d_end)
-m = compute_hf_metrics(df["sp500_ret_m"].dropna(), spy_rets)
+try:
+    spy_rets = load_spy(str(d_start), d_end)
+    m = compute_hf_metrics(df["sp500_ret_m"].dropna(), spy_rets)
+except Exception as e:
+    spy_rets = pd.Series(dtype=float)
+    m = dict(ann_ret=0, ann_vol=0, sharpe=np.nan, sortino=np.nan,
+             mdd=0, calmar=np.nan, win_rate=0, avg_win=0, avg_loss=0, alpha=np.nan)
 
 # ── KPI row deltas (MoM) — fix #17 ──────────────────────────────────
-last = df.iloc[-1]; prev = df.iloc[-2] if len(df)>1 else df.iloc[-1]
-sp_d   = (last["sp500"]/prev["sp500"]-1)*100
-dg_d   = last["dgs10"] - prev["dgs10"]
-
-# ── YTD — fix #1 ────────────────────────────────────────────────────
-cur_yr = df[df.index.year == datetime.now().year]
-ytd = (last["sp500"] / float(cur_yr["sp500"].iloc[0]) - 1)*100 if not cur_yr.empty else np.nan
+try:
+    last = df.iloc[-1]; prev = df.iloc[-2] if len(df)>1 else df.iloc[-1]
+    sp_d   = (last["sp500"]/prev["sp500"]-1)*100
+    dg_d   = last["dgs10"] - prev["dgs10"]
+    cur_yr = df[df.index.year == datetime.now().year]
+    ytd = (last["sp500"] / float(cur_yr["sp500"].iloc[0]) - 1)*100 if not cur_yr.empty else np.nan
+except Exception:
+    last = df.iloc[-1] if len(df)>0 else pd.Series({"sp500":0,"dgs10":0,"regime":"—","regime_score":0})
+    prev = last
+    sp_d, dg_d, ytd = 0.0, 0.0, np.nan
 
 # ── Title ──────────────────────────────────────────────────────────────
 st.markdown("""
