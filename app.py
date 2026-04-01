@@ -201,23 +201,34 @@ COLORS = ["#38bdf8","#818cf8","#34d399","#fb923c","#f472b6","#facc15","#a78bfa"]
 # ══════════════════════════════════════════
 @st.cache_data(ttl=3600, show_spinner="📡 Fetching macro data…")
 def load_macro() -> pd.DataFrame:
-    """Pull S&P500, VIX, 10Y yield via yfinance."""
+    """Pull S&P500, VIX, 10Y yield via yfinance. Falls back to demo data on failure."""
     tmap = {"sp500":"^GSPC","vix":"^VIX","dgs10":"^TNX","gold":"GLD","oil":"USO"}
     frames = {}
     for col, tkr in tmap.items():
-        try:
-            raw = yf.download(tkr, start="2005-01-01", auto_adjust=True,
-                              progress=False, multi_level_index=False, timeout=30)["Close"]
-            if isinstance(raw, pd.DataFrame): raw = raw.iloc[:, 0]
-            if isinstance(raw, pd.Series) and not raw.empty:
-                raw = raw.dropna().resample("ME").last()
-                raw.index = raw.index.to_period("M").to_timestamp()
-                frames[col] = raw
-        except Exception as e:
-            st.warning(f"Could not load {col} ({tkr}): {e}")
+        for attempt in range(3):
+            try:
+                raw = yf.download(tkr, start="2005-01-01", auto_adjust=True,
+                                  progress=False, multi_level_index=False, timeout=20)
+                if raw.empty:
+                    break
+                close = raw["Close"] if "Close" in raw.columns else raw.iloc[:, 0]
+                if isinstance(close, pd.DataFrame):
+                    close = close.iloc[:, 0]
+                close = close.dropna().resample("ME").last()
+                close.index = close.index.to_period("M").to_timestamp()
+                frames[col] = close
+                break
+            except Exception:
+                if attempt == 2:
+                    pass
     if not frames or "sp500" not in frames:
-        st.error("Failed to load S&P 500 data. Please reload.")
-        st.stop()
+        idx = pd.date_range("2010-01-01", periods=180, freq="ME")
+        frames["sp500"]  = pd.Series([2000 + i*15.0 for i in range(180)], index=idx)
+        frames["vix"]    = pd.Series(20.0, index=idx)
+        frames["dgs10"]  = pd.Series(4.0, index=idx)
+        frames["gold"]   = pd.Series(160.0, index=idx)
+        frames["oil"]    = pd.Series(60.0, index=idx)
+        st.warning("⚠️ Live market data unavailable — showing demo data. Click 🔄 Reload to retry.")
     df = pd.DataFrame(frames).sort_index()
     df.index.name = "date"
     df["sp500_ret_m"]    = np.log(df["sp500"]).diff()
@@ -415,13 +426,15 @@ df = df_raw[(df_raw.index >= pd.Timestamp(d_start)) &
 def load_spy(start, end):
     try:
         raw = yf.download("SPY", start=start, end=str(end), auto_adjust=True,
-                          progress=False, multi_level_index=False)["Close"]
-        if isinstance(raw, pd.DataFrame): raw = raw.iloc[:, 0]
+                          progress=False, multi_level_index=False, timeout=20)
         if raw.empty:
             return pd.Series(dtype=float)
-        raw = raw.resample("ME").last()
-        raw.index = raw.index.to_period("M").to_timestamp()
-        return np.log(raw).diff().dropna()
+        close = raw["Close"] if "Close" in raw.columns else raw.iloc[:, 0]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        close = close.resample("ME").last()
+        close.index = close.index.to_period("M").to_timestamp()
+        return np.log(close).diff().dropna()
     except Exception:
         return pd.Series(dtype=float)
 
