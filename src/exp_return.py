@@ -29,17 +29,24 @@ def train_regime_conditional_alpha(X: pd.DataFrame, y: pd.DataFrame, regime_prob
         # per regime per asset
         preds_k = np.zeros((nR, len(assets)))
         for k in range(nR):
-            w = train[pcols[k]].values
-            if np.nanmean(w) < 1e-3:
+            w_full = train[pcols[k]].values
+            if np.nanmean(w_full) < 1e-3:
                 continue
             for j,a in enumerate(assets):
-                yy = train[a].values
-                XX = train[x_cols].values
-                models[k][a].fit(XX, yy, rg__sample_weight=w)
+                valid = ~np.isnan(train[a].values) & ~np.isnan(w_full)
+                yy = train[a].values[valid]
+                XX = train[x_cols].values[valid]
+                w_valid = w_full[valid]
+
+                if len(yy) < 10:
+                    continue
+
+                models[k][a].fit(XX, yy, rg__sample_weight=w_valid)
                 preds_k[k, j] = models[k][a].predict(test[x_cols].values)[0]
 
         # mixture of experts
         pk = test[pcols].values[0]
-        exp.iloc[t] = (pk.reshape(-1,1) * preds_k).sum(axis=0)
+        if not np.any(np.isnan(pk)):
+            exp.iloc[t] = (pk.reshape(-1,1) * preds_k).sum(axis=0)
 
     return exp

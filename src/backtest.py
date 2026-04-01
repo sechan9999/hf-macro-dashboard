@@ -39,11 +39,11 @@ def run_backtest(rets_log: pd.DataFrame, exp_log: pd.DataFrame,
         cov = cov_shrink(win)
 
         # scenarios of next month
-        scen = scenario_from_normal(mu_log, cov, n_scen=6000, seed=7+t)
+        scen = scenario_from_normal(mu_log, cov, n_scen=1000, seed=7+t)
 
         # optimize
         w_new, _ = optimize_cvar(mu_simple, scen, w_prev=w, lam=lam, gamma=gamma, alpha=alpha,
-                                 bounds=bounds, n_samples=70000, seed=7+t)
+                                 bounds=bounds, n_samples=5000, seed=7+t)
 
         # realize next month return
         r_next = np.expm1(rets_log.iloc[t+1].values)  # convert realized log to simple
