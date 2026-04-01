@@ -1,22 +1,53 @@
-import os, warnings
+import os, sys, warnings, traceback
+warnings.filterwarnings("ignore")
+
+# ── 안전한 import - 실패해도 앱이 죽지 않도록 ─────────────────────────
+_import_errors = {}
+
 try:
     from google import genai
+    from google.genai import types as genai_types
     _GENAI_OK = True
-except ImportError:
+except Exception as _e:
     genai = None
+    genai_types = None
     _GENAI_OK = False
+    _import_errors["google-genai"] = str(_e)
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, date
 
-import numpy as np
-import pandas as pd
-import streamlit as st
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import yfinance as yf
+try:
+    import numpy as np
+except Exception as _e:
+    _import_errors["numpy"] = str(_e)
+    raise  # numpy 없으면 앱 실행 불가
 
-warnings.filterwarnings("ignore")
+try:
+    import pandas as pd
+except Exception as _e:
+    _import_errors["pandas"] = str(_e)
+    raise
+
+import streamlit as st
+
+if _import_errors:
+    st.warning(f"Some packages failed to import: {_import_errors}")
+
+try:
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+except Exception as _e:
+    _import_errors["plotly"] = str(_e)
+    st.error(f"Plotly import failed: {_e}")
+    st.stop()
+
+try:
+    import yfinance as yf
+except Exception as _e:
+    _import_errors["yfinance"] = str(_e)
+    st.error(f"yfinance import failed: {_e}")
+    st.stop()
 
 # ── Secrets ──────────────────────────────────────────────────────────
 def _get_fred_key():
@@ -1134,7 +1165,6 @@ Answer as a senior macro analyst using the data above."""
             try:
                 with st.spinner("Gemini is analyzing macro conditions..."):
                     client = genai.Client(api_key=gemini_key)
-                    from google.genai import types as genai_types
                     response = client.models.generate_content(
                         model="gemini-2.0-flash",
                         contents=prompts[analysis_type],
