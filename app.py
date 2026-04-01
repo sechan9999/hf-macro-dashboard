@@ -700,8 +700,8 @@ with tab4:
 
         # Main chart with confidence band + realized
         fig = go.Figure()
-        upper = (exp["exp_ann_return"] + roll_std).fillna(method="ffill")
-        lower = (exp["exp_ann_return"] - roll_std).fillna(method="ffill")
+        upper = (exp["exp_ann_return"] + roll_std).ffill()
+        lower = (exp["exp_ann_return"] - roll_std).ffill()
         fig.add_trace(go.Scatter(
             x=list(exp.index) + list(exp.index[::-1]),
             y=list(upper) + list(lower[::-1]),
@@ -1083,14 +1083,17 @@ Answer as a senior macro analyst using the data above."""
             try:
                 with st.spinner("Gemini is analyzing macro conditions..."):
                     client = genai.Client(api_key=gemini_key)
+                    from google.genai import types as genai_types
                     response = client.models.generate_content(
-                        model="gemini-3-flash-preview",
+                        model="gemini-2.0-flash",
                         contents=prompts[analysis_type],
-                        config={
-                            "system_instruction": "You are a senior quantitative macro analyst at a leading hedge fund. "
-                                               "Your analysis is precise, data-driven, and actionable. "
-                                               "You interpret financial data with institutional rigor."
-                        }
+                        config=genai_types.GenerateContentConfig(
+                            system_instruction=(
+                                "You are a senior quantitative macro analyst at a leading hedge fund. "
+                                "Your analysis is precise, data-driven, and actionable. "
+                                "You interpret financial data with institutional rigor."
+                            )
+                        )
                     )
 
                 st.markdown("---")
@@ -1104,7 +1107,7 @@ Answer as a senior macro analyst using the data above."""
                 """, unsafe_allow_html=True)
                 
                 st.markdown("---")
-                st.caption(f"Model: gemini-3-flash-preview | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Data through {df.index[-1].strftime('%B %Y')}")
+                st.caption(f"Model: gemini-2.0-flash | Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')} | Data through {df.index[-1].strftime('%B %Y')}")
 
                 # Token usage
                 if hasattr(response, 'usage_metadata'):
