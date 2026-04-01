@@ -207,7 +207,7 @@ def load_macro() -> pd.DataFrame:
     for col, tkr in tmap.items():
         try:
             raw = yf.download(tkr, start="2005-01-01", auto_adjust=True,
-                              progress=False, multi_level_index=False)["Close"]
+                              progress=False, multi_level_index=False, timeout=30)["Close"]
             if isinstance(raw, pd.DataFrame): raw = raw.iloc[:, 0]
             if isinstance(raw, pd.Series) and not raw.empty:
                 raw = raw.dropna().resample("ME").last()
@@ -774,8 +774,12 @@ with tab5:
     with col_s:
         sort_col = st.selectbox("Sort By", ["1M Ret","YTD","RSI","5D Ret"], index=0)
 
-    with st.spinner("🔎 Scanning tickers in parallel…"):
-        sc_df = run_screener(universe, period_days)
+    run_btn = st.button("🔎 Run Screener", type="primary")
+    if run_btn:
+        with st.spinner("🔎 Scanning tickers in parallel…"):
+            sc_df = run_screener(universe, period_days)
+    else:
+        sc_df = pd.DataFrame()
 
     if not sc_df.empty:
         sc_df = sc_df.sort_values(sort_col, ascending=False)
