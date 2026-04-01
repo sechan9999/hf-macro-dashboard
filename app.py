@@ -205,11 +205,19 @@ def load_macro() -> pd.DataFrame:
     tmap = {"sp500":"^GSPC","vix":"^VIX","dgs10":"^TNX","gold":"GLD","oil":"USO"}
     frames = {}
     for col, tkr in tmap.items():
-        raw = yf.download(tkr, start="2005-01-01", auto_adjust=True, progress=False)["Close"]
-        if isinstance(raw, pd.DataFrame): raw = raw.iloc[:,0]
-        raw = raw.dropna().resample("ME").last()
-        raw.index = raw.index.to_period("M").to_timestamp()
-        frames[col] = raw
+        try:
+            raw = yf.download(tkr, start="2005-01-01", auto_adjust=True,
+                              progress=False, multi_level_index=False)["Close"]
+            if isinstance(raw, pd.DataFrame): raw = raw.iloc[:, 0]
+            if isinstance(raw, pd.Series) and not raw.empty:
+                raw = raw.dropna().resample("ME").last()
+                raw.index = raw.index.to_period("M").to_timestamp()
+                frames[col] = raw
+        except Exception as e:
+            st.warning(f"Could not load {col} ({tkr}): {e}")
+    if not frames or "sp500" not in frames:
+        st.error("Failed to load S&P 500 data. Please reload.")
+        st.stop()
     df = pd.DataFrame(frames).sort_index()
     df.index.name = "date"
     df["sp500_ret_m"]    = np.log(df["sp500"]).diff()
@@ -405,11 +413,17 @@ df = df_raw[(df_raw.index >= pd.Timestamp(d_start)) &
 # ── SPY benchmark ─────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_spy(start, end):
-    raw = yf.download("SPY", start=start, end=str(end), auto_adjust=True, progress=False)["Close"]
-    if isinstance(raw, pd.DataFrame): raw = raw.iloc[:,0]
-    raw = raw.resample("ME").last()
-    raw.index = raw.index.to_period("M").to_timestamp()
-    return np.log(raw).diff().dropna()
+    try:
+        raw = yf.download("SPY", start=start, end=str(end), auto_adjust=True,
+                          progress=False, multi_level_index=False)["Close"]
+        if isinstance(raw, pd.DataFrame): raw = raw.iloc[:, 0]
+        if raw.empty:
+            return pd.Series(dtype=float)
+        raw = raw.resample("ME").last()
+        raw.index = raw.index.to_period("M").to_timestamp()
+        return np.log(raw).diff().dropna()
+    except Exception:
+        return pd.Series(dtype=float)
 
 spy_rets = load_spy(str(d_start), d_end)
 m = compute_hf_metrics(df["sp500_ret_m"].dropna(), spy_rets)
@@ -1181,7 +1195,7 @@ def fetch_nvda_full(period_days: int = 365):
     df["ba_imbalance"] = (df["Close"] - df["mid"]) / (df["High"] - df["Low"] + 1e-3) * 100
 
     # ── 5. Put/Call skew proxy via VIX divergence ────────────────────────
-    vix_raw = yf.download("^VIX", period=f"{period_days}d", auto_adjust=True, progress=False)["Close"]
+    vix_raw = yf.download("^VIX", period=f"{period_days}d", auto_adjust=True, progress=False, multi_level_index=False)["Close"]
     if isinstance(vix_raw, pd.DataFrame):
         vix_raw = vix_raw.iloc[:, 0]
     vix = vix_raw.tz_localize(None) if hasattr(vix_raw.index, 'tz') and vix_raw.index.tz is not None else vix_raw
@@ -1226,7 +1240,7 @@ def fetch_nvda_full(period_days: int = 365):
     for name, tkr in peers.items():
         try:
             raw = yf.download(tkr, period=f"{period_days}d",
-                              auto_adjust=True, progress=False)["Close"]
+                              auto_adjust=True, progress=False, multi_level_index=False)["Close"]
             if isinstance(raw, pd.DataFrame):
                 raw = raw.iloc[:, 0]
             raw.index = pd.to_datetime(raw.index).tz_localize(None)
