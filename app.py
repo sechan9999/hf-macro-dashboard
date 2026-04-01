@@ -228,8 +228,9 @@ def load_macro() -> pd.DataFrame:
         frames["dgs10"]  = pd.Series(4.0, index=idx)
         frames["gold"]   = pd.Series(160.0, index=idx)
         frames["oil"]    = pd.Series(60.0, index=idx)
-        st.warning("⚠️ Live market data unavailable — showing demo data. Click 🔄 Reload to retry.")
-    df = pd.DataFrame(frames).sort_index()
+        frames["_is_demo"] = pd.Series(1.0, index=pd.date_range("2010-01-01", periods=len(frames["sp500"]), freq="ME"))
+    df = pd.DataFrame({k:v for k,v in frames.items() if k != "_is_demo"}).sort_index()
+    df["_is_demo"] = "_is_demo" in frames   # 데모 여부 컬럼으로 표시
     df.index.name = "date"
     df["sp500_ret_m"]    = np.log(df["sp500"]).diff()
     df["realized_vol_12m"] = df["sp500_ret_m"].rolling(12).std() * np.sqrt(12)
@@ -418,6 +419,8 @@ with st.sidebar:
 # LOAD DATA
 # ══════════════════════════════════════════
 df_raw = load_macro()
+if df_raw.get("_is_demo", pd.Series([False])).iloc[0] if "_is_demo" in df_raw.columns else False:
+    st.warning("⚠️ Live market data unavailable — showing demo data. Click 🔄 Reload to retry.")
 df = df_raw[(df_raw.index >= pd.Timestamp(d_start)) &
             (df_raw.index <= pd.Timestamp(d_end))].copy()
 
