@@ -1,0 +1,18 @@
+{
+  "schemaVersion": "1.0",
+  "currentFeature": "danger-zone-strategy-hints",
+  "phase": "check",
+  "matchRate": 78,
+  "iterationCount": 0,
+  "features": {
+    "danger-zone-strategy-hints": {
+      "phase": "check",
+      "matchRate": 78,
+      "iterationCount": 0,
+      "startedAt": "2026-05-06T00:00:00Z",
+      "lastCheckedAt": "2026-05-06T00:00:00Z",
+      "analysisDoc": "docs/03-analysis/danger-zone-strategy-hints.analysis.md",
+      "notes": "Post-hoc Check — no Plan/Design docs exist for this pre-existing feature. Analysis derived spec from README + implicit UX expectations."
+    }
+  }
+}
