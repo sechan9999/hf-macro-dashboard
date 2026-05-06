@@ -66,6 +66,13 @@ except Exception as _e:
     _PDR_OK = False
     _import_errors["pandas-datareader"] = str(_e)
 
+try:
+    from src.methodology import render as render_methodology
+except Exception as _e:
+    def render_methodology(tab_key, st):  # graceful no-op fallback
+        return
+    _import_errors["methodology"] = str(_e)
+
 # ── Secrets ──────────────────────────────────────────────────────────
 def _get_fred_key():
     try:
@@ -697,6 +704,7 @@ tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10 = st.tabs([
 
 # ─── Tab 1: Performance ──────────────────────────────────────────────
 with tab1:
+    render_methodology("performance", st)
     # SPY overlay — fix #10
     spy_cum = load_spy(str(d_start), d_end)
     spy_idx = np.exp(spy_cum.cumsum()) * 100
@@ -757,6 +765,7 @@ with tab1:
 
 # ─── Tab 2: Macro & Rates ────────────────────────────────────────────
 with tab2:
+    render_methodology("macro_rates", st)
     st.info("📊 **Macro Framework**: These indicators track long-term debt costs, corporate default risk, and market fear (volatility).")
     c1,c2 = st.columns(2)
     with c1:
@@ -800,6 +809,7 @@ with tab2:
 
 # ─── Tab 3: Regime ──────────────────────────────────────────────────
 with tab3:
+    render_methodology("regime", st)
     # Color-coded price by regime — fix #12 (labeled by macro characteristics)
     # Color-coded price by regime
     color_map = {"Risk-On 🟢":"#34d399","Neutral 🟡":"#facc15","Risk-Off 🔴":"#f87171"}
@@ -892,6 +902,7 @@ def compute_expected_returns(df_hash: str, macro_data: pd.DataFrame):
     return out[["exp_ann_return","sp500_ret_m","pred_std"]].dropna(subset=["exp_ann_return"])
 
 with tab4:
+    render_methodology("expected_returns", st)
     # Try FRED parquet first; fall back to live yfinance model
     exp = None
     source_label = ""
@@ -966,6 +977,7 @@ with tab4:
 
 # ─── Tab 5: Screener ─────────────────────────────────────────────────
 with tab5:
+    render_methodology("screener", st)
     col_u, col_p, col_s = st.columns([2,1,1])
     with col_u:
         # fix #19: custom ticker input
@@ -1027,6 +1039,7 @@ with tab5:
 
 # ─── Tab 6: Technical Analysis ───────────────────────────────────────
 with tab6:
+    render_methodology("technical", st)
     # ══════════════════════════════════════════════════════════════════
     # 🎯 Multi-Ticker Buy Zone Scanner — weekly 20/50 MA · RSI · MACD
     # ══════════════════════════════════════════════════════════════════
@@ -1226,6 +1239,8 @@ Three indicators are computed on the weekly series:
 
 # ─── Tab 7: Risk Simulation ──────────────────────────────────────────
 with tab7:
+    render_methodology("risk_sim", st)
+
     @st.cache_data(ttl=3600, show_spinner=False)
     def run_mc(mu, vol, n, h=12):
         rng = np.random.default_rng(99)
@@ -1297,6 +1312,7 @@ def _get_gemini_key():
     return os.environ.get("GEMINI_API_KEY", "")
 
 with tab8:
+    render_methodology("gemini", st)
     st.markdown("### ✨ Gemini AI Macro Analyst")
     st.caption("Powered by Google Gemini 3 Flash via Unified GenAI SDK")
 
@@ -1571,6 +1587,7 @@ def _danger_color(val):
 
 
 with tab9:
+    render_methodology("danger_zone", st)
     st.markdown("""
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">
       <span style="font-size:2rem;">🔥</span>
@@ -1986,6 +2003,7 @@ def run_strategy_backtest(macro_df: pd.DataFrame, *, use_regime: bool, use_momen
 
 # ─── Tab 10: Strategy Backtest ────────────────────────────────────────
 with tab10:
+    render_methodology("backtest", st)
     st.markdown("""
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">
       <span style="font-size:2rem;">📊</span>
