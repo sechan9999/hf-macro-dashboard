@@ -443,6 +443,88 @@ def run_screener(tickers: tuple, period_days: int):
                 results.append(r)
     return pd.DataFrame(results)
 
+# ── Buy-Zone Scanner (weekly bars) ─────────────────────────────────────
+def _zone_for(price, ma20, ma50, rsi):
+    """Deterministic weekly zone classification. Returns (zone_label, buy_lo, buy_hi, note)."""
+    if not (np.isfinite(price) and np.isfinite(ma20) and np.isfinite(ma50) and np.isfinite(rsi)):
+        return "⚪ Insufficient data", float("nan"), float("nan"), "Need ≥ 50 weekly bars"
+    if rsi >= 70 or price > ma20 * 1.10:
+        lo, hi = ma20 * 0.95, ma20
+        return "🔴 Avoid (Extended)", lo, hi, f"Wait for pullback to ${lo:,.2f}–${hi:,.2f}"
+    if price <= ma50 * 1.02 and rsi <= 40:
+        lo, hi = ma50 * 0.97, ma50 * 1.02
+        return "🟢 Strong Buy (Accumulation)", lo, hi, f"Accumulate ${lo:,.2f}–${hi:,.2f}"
+    if ma50 < price <= ma20 and 40 < rsi < 60:
+        lo, hi = ma50, ma20
+        return "🟢 Pullback Buy", lo, hi, f"Buy on pullback ${lo:,.2f}–${hi:,.2f}"
+    if ma20 < price <= ma20 * 1.05 and 50 <= rsi < 70:
+        lo, hi = ma20, ma20 * 1.05
+        return "🟡 Trend Continuation", lo, hi, f"Add on retest ${lo:,.2f}–${hi:,.2f}"
+    return "⚪ Watch / No Edge", float("nan"), float("nan"), f"No clean entry; key level ${ma20:,.2f}"
+
+def _scan_one_ticker(ticker: str, years: int):
+    try:
+        raw = yf.download(ticker, period=f"{years}y", auto_adjust=True,
+                          progress=False, multi_level_index=False, timeout=20)
+        if raw is None or raw.empty:
+            return {"Ticker": ticker, "_err": "no data"}
+        close = raw["Close"] if "Close" in raw.columns else raw.iloc[:, 0]
+        if isinstance(close, pd.DataFrame):
+            close = close.iloc[:, 0]
+        wk = close.resample("W-FRI").last().dropna()
+        if len(wk) < 55:
+            return {"Ticker": ticker, "_err": f"only {len(wk)} weekly bars"}
+        sma20 = wk.rolling(20).mean()
+        sma50 = wk.rolling(50).mean()
+        delta = wk.diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        rsi   = 100 - 100 / (1 + gain / (loss + 1e-9))
+        ema12 = wk.ewm(span=12, adjust=False).mean()
+        ema26 = wk.ewm(span=26, adjust=False).mean()
+        macd  = ema12 - ema26
+        sig   = macd.ewm(span=9, adjust=False).mean()
+        hist  = macd - sig
+
+        price  = float(wk.iloc[-1])
+        ma20_v = float(sma20.iloc[-1])
+        ma50_v = float(sma50.iloc[-1])
+        rsi_v  = float(rsi.iloc[-1])
+        macd_v = float(macd.iloc[-1])
+        sig_v  = float(sig.iloc[-1])
+        h_v    = float(hist.iloc[-1])
+        h_prev = float(hist.iloc[-2]) if len(hist) > 1 else h_v
+
+        if   macd_v > sig_v and h_v > h_prev: macd_state = "↑ confirming"
+        elif macd_v < sig_v and h_v < h_prev: macd_state = "↓ diverging"
+        else:                                  macd_state = "→ flat"
+
+        zone, lo, hi, note = _zone_for(price, ma20_v, ma50_v, rsi_v)
+        return {
+            "Ticker": ticker,
+            "Price":  price,
+            "RSI(W)": round(rsi_v, 1),
+            "MA20W":  round(ma20_v, 2),
+            "MA50W":  round(ma50_v, 2),
+            "MA20 dist %": (price/ma20_v - 1) * 100 if ma20_v else float("nan"),
+            "MACD(W)": round(macd_v, 3),
+            "MACD State": macd_state,
+            "Zone": zone,
+            "Buy Range": note,
+            "_lo": lo, "_hi": hi,
+        }
+    except Exception as e:
+        return {"Ticker": ticker, "_err": str(e)[:80]}
+
+@st.cache_data(ttl=900, show_spinner="🎯 Computing weekly buy zones…")
+def scan_buy_zones(tickers: tuple, years: int = 3):
+    rows = []
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futs = {ex.submit(_scan_one_ticker, t, years): t for t in tickers}
+        for f in as_completed(futs):
+            rows.append(f.result())
+    return pd.DataFrame(rows)
+
 # ── Risk metrics ──────────────────────────────────────────────────────
 def compute_hf_metrics(rets: pd.Series, bench_rets: pd.Series | None = None):
     ann_ret  = rets.mean() * 12
@@ -945,6 +1027,102 @@ with tab5:
 
 # ─── Tab 6: Technical Analysis ───────────────────────────────────────
 with tab6:
+    # ══════════════════════════════════════════════════════════════════
+    # 🎯 Multi-Ticker Buy Zone Scanner — weekly 20/50 MA · RSI · MACD
+    # ══════════════════════════════════════════════════════════════════
+    st.markdown("### 🎯 Buy Zone Scanner — Weekly 20MA · 50MA · RSI · MACD")
+    st.caption(
+        "Deterministic translation of weekly 20w/50w SMAs and RSI into a "
+        "zone label and a suggested *technical* buy range. **Reference levels, "
+        "not investment advice — trade size, stops, fundamentals, and macro "
+        "context are out of scope here.**"
+    )
+
+    BZS_DEFAULT = ("NVDA","MSFT","TSM","ASML","AMZN","GOOGL","AVGO","LLY","V","COST")
+    cA, cB = st.columns([3, 1])
+    with cA:
+        bzs_input = st.text_input("Tickers (comma-separated)",
+                                   ", ".join(BZS_DEFAULT), key="bzs_tickers")
+    with cB:
+        bzs_years = st.selectbox("Lookback", [2, 3, 5, 7], index=1, key="bzs_years")
+    bzs_tickers = tuple(t.strip().upper() for t in bzs_input.split(",") if t.strip())[:30]
+
+    if bzs_tickers:
+        bzs_df = scan_buy_zones(bzs_tickers, years=int(bzs_years))
+        ok = bzs_df[~bzs_df.get("Price", pd.Series(dtype=float)).isna()] if "Price" in bzs_df else pd.DataFrame()
+        bad = bzs_df[bzs_df.get("Price", pd.Series(dtype=float)).isna()] if "Price" in bzs_df else bzs_df
+
+        if not ok.empty:
+            # KPI row — count of names per zone
+            zone_counts = ok["Zone"].value_counts().to_dict()
+            cs = st.columns(5)
+            cs[0].metric("🟢 Strong Buy",   zone_counts.get("🟢 Strong Buy (Accumulation)", 0))
+            cs[1].metric("🟢 Pullback",     zone_counts.get("🟢 Pullback Buy", 0))
+            cs[2].metric("🟡 Trend Cont.",  zone_counts.get("🟡 Trend Continuation", 0))
+            cs[3].metric("🔴 Avoid",         zone_counts.get("🔴 Avoid (Extended)", 0))
+            cs[4].metric("⚪ Watch",         zone_counts.get("⚪ Watch / No Edge", 0))
+
+            display_cols = ["Ticker","Price","RSI(W)","MA20W","MA50W","MA20 dist %",
+                            "MACD(W)","MACD State","Zone","Buy Range"]
+            show = ok.copy()
+            # zone-priority sort: Strong Buy → Pullback → Trend → Watch → Avoid
+            zone_order = {"🟢 Strong Buy (Accumulation)":0, "🟢 Pullback Buy":1,
+                          "🟡 Trend Continuation":2, "⚪ Watch / No Edge":3,
+                          "🔴 Avoid (Extended)":4, "⚪ Insufficient data":5}
+            show["_ord"] = show["Zone"].map(zone_order).fillna(9)
+            show = show.sort_values(["_ord","RSI(W)"]).drop(columns=["_ord"])
+            show = show[display_cols]
+            show["Price"]       = show["Price"].map(lambda v: f"${v:,.2f}")
+            show["MA20W"]       = show["MA20W"].map(lambda v: f"${v:,.2f}")
+            show["MA50W"]       = show["MA50W"].map(lambda v: f"${v:,.2f}")
+            show["MA20 dist %"] = show["MA20 dist %"].map(lambda v: f"{v:+.1f}%")
+            st.dataframe(show, use_container_width=True, hide_index=True)
+
+            st.download_button(
+                "📥 Export buy-zone scan to CSV",
+                ok.drop(columns=[c for c in ("_lo","_hi","_err") if c in ok.columns])
+                  .to_csv(index=False).encode("utf-8"),
+                file_name="buy_zone_scanner.csv",
+                mime="text/csv",
+                key="bzs_csv",
+            )
+
+        if not bad.empty:
+            with st.expander(f"⚠️ Skipped {len(bad)} ticker(s)"):
+                st.dataframe(bad[["Ticker"] + [c for c in bad.columns if c == "_err"]],
+                             use_container_width=True, hide_index=True)
+
+        with st.expander("ℹ️ How the Buy Zone Scanner works (and what it isn't)"):
+            st.markdown("""
+**Inputs.** Daily closes from yfinance, resampled to weekly Friday closes.
+Three indicators are computed on the weekly series:
+
+* **20-week SMA** — short-term trend backbone (~ 100 trading days). Holding above it is the canonical *uptrend confirmed* filter.
+* **50-week SMA** — long-term trend (~ 250 trading days). Bounces here are textbook accumulation entries.
+* **Weekly RSI(14)** — momentum oscillator. < 40 oversold, > 70 overbought.
+* **Weekly MACD(12-26-9)** — confirmation only. The *MACD State* column reads the direction of the histogram vs its signal line: **↑ confirming** = momentum accelerating, **↓ diverging** = momentum fading, **→ flat** = neutral.
+
+**Deterministic zone rules.**
+
+| Zone | Trigger | Suggested technical buy range |
+|------|---------|-------------------------------|
+| 🟢 Strong Buy (Accumulation) | price ≤ 50w × 1.02 **AND** RSI ≤ 40 | 50w × 0.97 → 50w × 1.02 |
+| 🟢 Pullback Buy | 50w < price ≤ 20w **AND** 40 < RSI < 60 | 50w → 20w |
+| 🟡 Trend Continuation | 20w < price ≤ 20w × 1.05 **AND** 50 ≤ RSI < 70 | 20w → 20w × 1.05 |
+| 🔴 Avoid (Extended) | RSI ≥ 70 **OR** price > 20w × 1.10 | wait for pullback to 20w × 0.95 → 20w |
+| ⚪ Watch / No Edge | anything else | no clean technical entry |
+
+**Caveats.**
+* Past technical levels are not future fills. Names that pierce the 50w SMA in a fundamental break-down can keep falling for years (Cisco 2000, Meta 2022 briefly, etc.).
+* MACD shown as confirmation only — never overrides the zone classification.
+* "Avoid" only flags an *extension* — it is not a sell signal for an existing position.
+* The scanner does not adjust for sector beta, news, earnings dates, or macro regime. Cross-check the *Macro & Rates*, *Regime*, and *Strategy Backtest* tabs before acting.
+* **Not investment advice.** This is a deterministic technical-reference grid — no recommendation about any specific holding is intended.
+            """)
+
+    st.markdown("---")
+    st.markdown("### 🔍 Single-Ticker Deep Dive")
+
     col_t, col_pd, col_d1, col_d2 = st.columns([1,1,1,1])
     with col_t:
         tech_ticker = st.text_input("Ticker", "SPY").upper()
