@@ -49,6 +49,23 @@ except Exception as _e:
     st.error(f"yfinance import failed: {_e}")
     st.stop()
 
+# Optional FRED stack — used only when an API key is present
+try:
+    from fredapi import Fred
+    _FREDAPI_OK = True
+except Exception as _e:
+    Fred = None
+    _FREDAPI_OK = False
+    _import_errors["fredapi"] = str(_e)
+
+try:
+    import pandas_datareader.data as pdr
+    _PDR_OK = True
+except Exception as _e:
+    pdr = None
+    _PDR_OK = False
+    _import_errors["pandas-datareader"] = str(_e)
+
 # ── Secrets ──────────────────────────────────────────────────────────
 def _get_fred_key():
     try:
@@ -230,6 +247,40 @@ COLORS = ["#38bdf8","#818cf8","#34d399","#fb923c","#f472b6","#facc15","#a78bfa"]
 # ══════════════════════════════════════════
 # DATA FETCHING (cached)
 # ══════════════════════════════════════════
+@st.cache_data(ttl=86400, show_spinner=False)
+def _try_load_fred_series(start_ts, end_ts):
+    """Return (credit_spread_pct, yc_slope_pct) series from FRED if reachable,
+    else (None, None). credit_spread = BAA-AAA, slope = T10Y2Y. Both monthly.
+    Resilient: returns None on any failure so the proxy is used."""
+    try:
+        start = pd.Timestamp(start_ts) - pd.DateOffset(months=2)
+        end   = pd.Timestamp(end_ts)
+        key = _get_fred_key()
+        if key and _FREDAPI_OK:
+            fr = Fred(api_key=key)
+            baa = pd.Series(fr.get_series("BAA", observation_start=start, observation_end=end))
+            aaa = pd.Series(fr.get_series("AAA", observation_start=start, observation_end=end))
+            slope = pd.Series(fr.get_series("T10Y2Y", observation_start=start, observation_end=end))
+        elif _PDR_OK:
+            baa = pdr.DataReader("BAA", "fred", start, end).iloc[:, 0]
+            aaa = pdr.DataReader("AAA", "fred", start, end).iloc[:, 0]
+            slope = pdr.DataReader("T10Y2Y", "fred", start, end).iloc[:, 0]
+        else:
+            return None, None
+
+        spread = (baa - aaa).dropna()
+        spread.index = pd.to_datetime(spread.index)
+        slope.index  = pd.to_datetime(slope.index)
+        spread = spread.resample("ME").last()
+        slope  = slope.resample("ME").last()
+        spread.index = spread.index.to_period("M").to_timestamp()
+        slope.index  = slope.index.to_period("M").to_timestamp()
+        if spread.dropna().empty or slope.dropna().empty:
+            return None, None
+        return spread, slope
+    except Exception:
+        return None, None
+
 @st.cache_data(ttl=3600, show_spinner="📡 Fetching macro data…")
 def load_macro() -> pd.DataFrame:
     """Pull S&P500, VIX, 10Y yield via yfinance. Falls back to demo data on failure."""
@@ -270,8 +321,21 @@ def load_macro() -> pd.DataFrame:
     df["cumret"]           = np.exp(df["sp500_ret_m"].cumsum()) * 100
     df["drawdown"]         = df["cumret"] / df["cumret"].cummax() - 1
     df["dgs10"]            = df["dgs10"].ffill()
-    df["credit_spread"]    = (df["dgs10"] * 0.35 + 1.5 - df["dgs10"] * 0.1).abs() / 100
-    df["yc_slope"]         = (df["dgs10"] - df["dgs10"] * 0.65) / 100
+
+    # Real FRED series when available; deterministic proxy otherwise.
+    fred_credit, fred_slope = _try_load_fred_series(df.index.min(), df.index.max())
+    if fred_credit is not None:
+        df["credit_spread"] = fred_credit.reindex(df.index).ffill() / 100.0
+        df["_credit_source"] = "FRED:BAA-AAA"
+    else:
+        df["credit_spread"] = (df["dgs10"] * 0.35 + 1.5 - df["dgs10"] * 0.1).abs() / 100
+        df["_credit_source"] = "proxy"
+    if fred_slope is not None:
+        df["yc_slope"] = fred_slope.reindex(df.index).ffill() / 100.0
+        df["_slope_source"] = "FRED:T10Y2Y"
+    else:
+        df["yc_slope"]  = (df["dgs10"] - df["dgs10"] * 0.65) / 100
+        df["_slope_source"] = "proxy"
     cs = (df["credit_spread"] - df["credit_spread"].mean()) / df["credit_spread"].std()
     rv = (df["realized_vol_12m"] - df["realized_vol_12m"].mean()) / df["realized_vol_12m"].std()
     df["regime_score"] = cs.fillna(0) + rv.fillna(0)
@@ -544,10 +608,10 @@ st.markdown("---")
 # ══════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════
-tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9 = st.tabs([
+tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10 = st.tabs([
     "📈 Performance","🌍 Macro & Rates","🔍 Regime","🤖 Expected Returns",
     "📊 Screener","📉 Technical","🎲 Risk Sim","✨ Gemini AI Analyst",
-    "🔥 NVDA Danger Zone"])
+    "🔥 NVDA Danger Zone","📊 Strategy Backtest"])
 
 # ─── Tab 1: Performance ──────────────────────────────────────────────
 with tab1:
@@ -1690,3 +1754,191 @@ with tab9:
             <li>Set trailing stop 10-15% below close</li>
             </ul></div>
             """, unsafe_allow_html=True)
+
+# ══════════════════════════════════════════════════════════════════════
+# Strategy Backtest engine — regime-gated SPY/cash with no-lookahead lag
+# ══════════════════════════════════════════════════════════════════════
+def run_strategy_backtest(macro_df: pd.DataFrame, *, use_regime: bool, use_momentum: bool,
+                          use_trend: bool, threshold: float, cost_bps: float,
+                          allow_short: bool):
+    """Walk-forward, no-lookahead backtest of an SPY/cash (or SPY/-SPY) strategy.
+
+    Position is decided from data observable at month T, then applied to the
+    realised return from T to T+1 via .shift(1). Net returns include linear
+    transaction costs proportional to turnover.
+    """
+    out = macro_df.copy()
+    out = out.dropna(subset=["sp500_ret_m"])
+
+    # signals (each ∈ {0,1}, evaluated at month T)
+    out["sig_regime"]   = (out["regime"] != "Risk-Off 🔴").astype(int)
+    out["sig_momentum"] = (out["momentum_12_1"] > 0).astype(int)
+    sma_10m = out["sp500"].rolling(10).mean()
+    out["sig_trend"]    = (out["sp500"] > sma_10m).astype(int)
+
+    cols = []
+    if use_regime:   cols.append("sig_regime")
+    if use_momentum: cols.append("sig_momentum")
+    if use_trend:    cols.append("sig_trend")
+
+    if not cols:
+        out["sig_score"] = 1.0
+    else:
+        out["sig_score"] = out[cols].mean(axis=1)
+
+    in_market = (out["sig_score"] >= threshold).astype(float)
+    if allow_short:
+        out_market = -1.0 * (out["sig_score"] < (1 - threshold)).astype(float)
+        target_w = in_market + out_market
+    else:
+        target_w = in_market
+
+    out["target_w"] = target_w
+    out["position"] = out["target_w"].shift(1).fillna(0.0)        # NO-LOOKAHEAD
+    out["turnover"] = out["position"].diff().abs().fillna(out["position"].abs())
+
+    cost = (cost_bps / 10000.0) * out["turnover"]
+    out["strat_ret_gross"] = out["position"] * out["sp500_ret_m"]
+    out["strat_ret"]       = out["strat_ret_gross"] - cost
+    out["strat_equity"]    = np.exp(out["strat_ret"].fillna(0.0).cumsum()) * 100
+    out["bh_equity"]       = np.exp(out["sp500_ret_m"].fillna(0.0).cumsum()) * 100
+    out["strat_dd"]        = out["strat_equity"] / out["strat_equity"].cummax() - 1
+    out["bh_dd"]           = out["bh_equity"]    / out["bh_equity"].cummax()    - 1
+    return out
+
+# ─── Tab 10: Strategy Backtest ────────────────────────────────────────
+with tab10:
+    st.markdown("""
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:4px;">
+      <span style="font-size:2rem;">📊</span>
+      <div>
+        <h2 style="margin:0;background:linear-gradient(135deg,#38bdf8,#818cf8,#34d399);
+          -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+          font-size:1.7rem;font-weight:800;">Strategy Backtest</h2>
+        <p style="margin:0;color:#64748b;font-size:.82rem;">
+          Walk-forward, no-lookahead · Regime + momentum + trend gating · Net of costs
+        </p>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    st.info("📐 **Construction**: at month *T* the engine reads only data observable at *T*, "
+            "then holds the position through month *T+1*. Position lag = 1 month "
+            "(no-lookahead). Cash leg earns 0%. Net = gross − bps × turnover.")
+
+    cfg1, cfg2 = st.columns([3, 2])
+    with cfg1:
+        st.markdown("**🎛️ Signal Gates**")
+        use_reg = st.checkbox("Regime filter (long when not Risk-Off)", value=True, key="bt_reg")
+        use_mom = st.checkbox("12-1 momentum > 0",                       value=True, key="bt_mom")
+        use_tr  = st.checkbox("Price > 10-month SMA (Faber rule)",       value=True, key="bt_tr")
+        thr     = st.slider("Aggregate signal threshold (avg of selected ≥ x → long)",
+                            0.34, 1.0, 0.5, 0.01, key="bt_thr")
+        allow_short = st.checkbox("Allow short when avg ≤ 1−threshold", value=False, key="bt_short")
+    with cfg2:
+        st.markdown("**💸 Frictions**")
+        cost_bps = st.slider("Round-trip cost (bps per unit turnover)", 0, 50, 5, 1, key="bt_cost")
+        st.caption("5 bps ≈ retail SPY ETF execution. Increase to stress-test net Sharpe.")
+
+    bt = run_strategy_backtest(df, use_regime=use_reg, use_momentum=use_mom,
+                               use_trend=use_tr, threshold=thr, cost_bps=cost_bps,
+                               allow_short=allow_short)
+
+    if bt["strat_ret"].dropna().empty:
+        st.error("No data after filters — widen the date range or relax the threshold.")
+    else:
+        # Tear-sheet metrics
+        m_strat = compute_hf_metrics(bt["strat_ret"].dropna(), bt["sp500_ret_m"].dropna())
+        m_bh    = compute_hf_metrics(bt["sp500_ret_m"].dropna())
+        time_in = bt["position"].abs().mean() * 100
+        n_flips = int((bt["position"].diff().abs() > 1e-9).sum())
+
+        k1,k2,k3,k4,k5,k6 = st.columns(6)
+        k1.metric("Strat Ann Ret", f"{m_strat['ann_ret']*100:.2f}%",
+                  f"{(m_strat['ann_ret']-m_bh['ann_ret'])*100:+.2f}% vs B&H")
+        k2.metric("Strat Sharpe",  f"{m_strat['sharpe']:.2f}",
+                  f"{(m_strat['sharpe']-m_bh['sharpe']):+.2f}" if np.isfinite(m_bh['sharpe']) else "—")
+        k3.metric("Strat Max DD",  f"{m_strat['mdd']*100:.1f}%",
+                  f"{(m_strat['mdd']-m_bh['mdd'])*100:+.1f}% vs B&H")
+        k4.metric("Calmar",        f"{m_strat['calmar']:.2f}" if np.isfinite(m_strat['calmar']) else "—")
+        k5.metric("Time in Market", f"{time_in:.1f}%")
+        k6.metric("Position Flips", f"{n_flips}")
+
+        # Equity curves
+        fig_eq = go.Figure()
+        fig_eq.add_trace(go.Scatter(x=bt.index, y=bt["bh_equity"], name="SPY Buy & Hold",
+                                    line=dict(color="#facc15", width=1.5, dash="dot")))
+        fig_eq.add_trace(go.Scatter(x=bt.index, y=bt["strat_equity"], name="Strategy (net)",
+                                    line=dict(color="#38bdf8", width=2.2),
+                                    fill="tozeroy", fillcolor="rgba(56,189,248,.06)"))
+        fig_eq.update_layout(title="Equity Curves (Base = 100, log returns compounded)",
+                             hovermode="x unified", **PT)
+        update_axes(fig_eq, "Date", "Equity Index")
+        st.plotly_chart(fig_eq, use_container_width=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            fig_dd = go.Figure()
+            fig_dd.add_trace(go.Scatter(x=bt.index, y=bt["bh_dd"]*100, name="B&H DD",
+                                        line=dict(color="#facc15", width=1.2, dash="dot")))
+            fig_dd.add_trace(go.Scatter(x=bt.index, y=bt["strat_dd"]*100, name="Strategy DD",
+                                        line=dict(color="#f87171", width=1.6),
+                                        fill="tozeroy", fillcolor="rgba(248,113,113,.10)"))
+            fig_dd.update_layout(title="Rolling Drawdown — Strategy vs B&H",
+                                 hovermode="x unified", **PT)
+            fig_dd.update_yaxes(ticksuffix="%")
+            update_axes(fig_dd, "Date", "Drawdown")
+            st.plotly_chart(fig_dd, use_container_width=True)
+        with c2:
+            fig_pos = go.Figure()
+            fig_pos.add_trace(go.Scatter(x=bt.index, y=bt["position"], name="Position",
+                                         line=dict(color="#34d399", width=1.6),
+                                         fill="tozeroy", fillcolor="rgba(52,211,153,.12)"))
+            fig_pos.add_hline(y=0, line_dash="dash", line_color="#64748b")
+            fig_pos.update_layout(title="Position Through Time (lagged 1m, no-lookahead)",
+                                  hovermode="x unified", **PT)
+            update_axes(fig_pos, "Date", "Weight in SPY")
+            st.plotly_chart(fig_pos, use_container_width=True)
+
+        # Side-by-side tear sheet
+        st.markdown("#### 📋 Side-by-Side Tear Sheet")
+        rows = [
+            ("Ann Return",   f"{m_strat['ann_ret']*100:.2f}%",   f"{m_bh['ann_ret']*100:.2f}%"),
+            ("Ann Vol",      f"{m_strat['ann_vol']*100:.2f}%",   f"{m_bh['ann_vol']*100:.2f}%"),
+            ("Sharpe",       f"{m_strat['sharpe']:.3f}",         f"{m_bh['sharpe']:.3f}"),
+            ("Sortino",      f"{m_strat['sortino']:.3f}" if np.isfinite(m_strat['sortino']) else "—",
+                              f"{m_bh['sortino']:.3f}"   if np.isfinite(m_bh['sortino'])   else "—"),
+            ("Max Drawdown", f"{m_strat['mdd']*100:.2f}%",       f"{m_bh['mdd']*100:.2f}%"),
+            ("Calmar",       f"{m_strat['calmar']:.3f}" if np.isfinite(m_strat['calmar']) else "—",
+                              f"{m_bh['calmar']:.3f}"   if np.isfinite(m_bh['calmar'])   else "—"),
+            ("Win Rate",     f"{m_strat['win_rate']*100:.1f}%",   f"{m_bh['win_rate']*100:.1f}%"),
+            ("Alpha vs SPY", f"{m_strat['alpha']*100:.2f}%" if np.isfinite(m_strat.get('alpha',np.nan)) else "—", "—"),
+        ]
+        st.dataframe(pd.DataFrame(rows, columns=["Metric","Strategy","SPY Buy & Hold"]),
+                     use_container_width=True, hide_index=True)
+
+        # Latest signal snapshot
+        st.markdown("#### 🚦 Live Signal — End of Sample")
+        last_row = bt.iloc[-1]
+        sig_cols = []
+        if use_reg: sig_cols.append(("Regime ≠ Risk-Off", int(last_row["sig_regime"])))
+        if use_mom: sig_cols.append(("12-1 Momentum > 0", int(last_row["sig_momentum"])))
+        if use_tr:  sig_cols.append(("Above 10m SMA",     int(last_row["sig_trend"])))
+        sig_df = pd.DataFrame(sig_cols, columns=["Gate","Triggered (1=Yes)"]) if sig_cols else \
+                 pd.DataFrame([("(no gates active — always long)", 1)], columns=["Gate","Triggered (1=Yes)"])
+        sig_df["Triggered (1=Yes)"] = sig_df["Triggered (1=Yes)"].map(lambda v: "✅ 1" if v else "❌ 0")
+        sig_df.loc[len(sig_df)] = ["Aggregate score",  f"{float(last_row['sig_score']):.2f}"]
+        sig_df.loc[len(sig_df)] = ["Position next month", f"{float(last_row['target_w']):+.0f}"]
+        st.dataframe(sig_df, use_container_width=True, hide_index=True)
+
+        with st.expander("📖 Methodology & Caveats"):
+            st.write("""
+            * **No-lookahead**: positions decided at month T are applied to T+1 returns via `.shift(1)`.
+            * **Cash leg**: out-of-market periods earn 0%. Add T-bill yield in a future iteration.
+            * **Costs**: linear in turnover; 5 bps ≈ retail SPY ETF round-trip.
+            * **Regime**: derived from credit-spread + realized-vol z-score (real BAA-AAA when FRED is reachable, proxy otherwise — see Macro & Rates tab).
+            * **Sample bias**: regime thresholds are calibrated on the full history, so the in-sample edge is optimistic. Use `Walk-forward` Ridge model in Tab 4 for a stricter test.
+            """)
+
+        st.caption(f"Credit spread source: **{df['_credit_source'].iloc[-1] if '_credit_source' in df.columns else 'proxy'}**"
+                   f" · Yield curve source: **{df['_slope_source'].iloc[-1] if '_slope_source' in df.columns else 'proxy'}**")

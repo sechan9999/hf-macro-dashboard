@@ -94,5 +94,34 @@ streamlit run app.py
 
 To activate the **Gemini AI Analyst**, simply enter your [Gemini API Key](https://aistudio.google.com/app/apikey) in the sidebar. The analyst will ingest live macro data and providing rigorous, data-driven briefings.
 
+## 📊 Strategy Backtest tab (new)
+
+A walk-forward, no-lookahead backtest of an SPY/cash (optionally SPY/-SPY) strategy
+gated by three independently-toggleable signals:
+
+* **Regime filter** — long when macro regime is not `Risk-Off`
+* **12-1 Momentum** — long when 12m-minus-1m S&P log return is positive
+* **Faber 10-month SMA** — long when SPY > its 10-month moving average
+
+The aggregate signal score is the average of selected gates. The position is decided
+at month *T* and applied to the *T+1* return via `.shift(1)` to remove lookahead.
+Linear transaction costs (default 5 bps per unit turnover) and an optional short
+leg are configurable from the sidebar of the tab. The tab shows equity curves vs
+buy-and-hold, drawdowns, position-through-time, a side-by-side tear sheet
+(Sharpe, Sortino, Calmar, MDD, win rate, alpha), and a live signal snapshot for
+the most recent month.
+
+## 🌐 Real FRED data (optional)
+
+`load_macro` now pulls the real **BAA-AAA credit spread** and **T10Y2Y yield-curve
+slope** from FRED whenever a `FRED_API_KEY` environment variable / Streamlit secret
+is present, or when `pandas-datareader` can reach the public FRED endpoint. If both
+fail, the previous deterministic proxy is used and the tab footer reports which
+source is active. Set the key on Streamlit Cloud via *Settings → Secrets*:
+
+```toml
+FRED_API_KEY = "your_key_here"
+```
+
 ---
 *© 2026 HF Research & Antigravity AI*
