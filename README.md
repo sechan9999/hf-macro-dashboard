@@ -1,22 +1,24 @@
 # ⚡ Macro Pulse: Hedge Fund Multi-Factor Macro Dashboard & Quant Signals
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://hf-macro-dashboard.streamlit.app/)
-[![Google Cloud Run](https://img.shields.io/badge/Google%20Cloud%20Run-Live-4285F4?logo=google-cloud&logoColor=white)](https://macro-pulse-xu76sksloq-uc.a.run.app)
+[![Google Cloud Run](https://img.shields.io/badge/Google%20Cloud%20Run-Live-4285F4?logo=google-cloud&logoColor=white)](https://macro-pulse-652787573242.us-central1.run.app)
+[![BigQuery](https://img.shields.io/badge/GCP%20BigQuery-Active-669DF6?logo=google-cloud&logoColor=white)](https://console.cloud.google.com/bigquery?project=agentichackathon-506620)
 [![Daily Quant Signal](https://github.com/sechan9999/hf-macro-dashboard/actions/workflows/daily-quant-signal.yml/badge.svg)](https://github.com/sechan9999/hf-macro-dashboard/actions/workflows/daily-quant-signal.yml)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 **Macro Pulse** is an institutional-grade financial intelligence and quantitative screening platform. It bridges the gap between retail technical indicators (simple 14-day RSI and moving averages) and hedge-fund macro risk management (credit spreads, yield-curve dynamics, regime-switching models, walk-forward strategy backtesting, and AI-driven macro commentary).
 
-Powered by **Streamlit**, **Plotly**, **yfinance**, **FRED**, **Scikit-learn**, and **Google Gemini AI**, Macro Pulse integrates 11 specialized analytical modules into a unified, free, real-time web dashboard.
+Powered by **Streamlit**, **Plotly**, **yfinance**, **FRED**, **Scikit-learn**, **Google BigQuery**, and **Google Gemini AI**, Macro Pulse integrates 11 specialized analytical modules into a unified, free, real-time web dashboard.
 
 ---
 
 ## 🔗 Live Deployments
 
-* **Streamlit Community Cloud (Primary)**: [https://hf-macro-dashboard.streamlit.app/](https://hf-macro-dashboard.streamlit.app/)
-* **Google Cloud Run (Serverless)**: [https://macro-pulse-xu76sksloq-uc.a.run.app](https://macro-pulse-xu76sksloq-uc.a.run.app)
+* **Google Cloud Run (Serverless GCP Deployment)**: [https://macro-pulse-652787573242.us-central1.run.app](https://macro-pulse-652787573242.us-central1.run.app)
+* **Streamlit Community Cloud**: [https://hf-macro-dashboard.streamlit.app/](https://hf-macro-dashboard.streamlit.app/)
 * **GitHub Repository**: [https://github.com/sechan9999/hf-macro-dashboard](https://github.com/sechan9999/hf-macro-dashboard)
+
 
 ---
 
@@ -129,6 +131,7 @@ The complete documentation is also compiled in [`docs/methodology.md`](docs/meth
 
 | Layer | Technology |
 | :--- | :--- |
+| **Cloud Data Warehouse** | [Google BigQuery](https://cloud.google.com/bigquery) (Serverless partition tables & quant marts) |
 | **Frontend UI** | [Streamlit](https://streamlit.io/) (Dark financial theme, custom CSS layout) |
 | **Data Visualization** | [Plotly](https://plotly.com/python/) (Interactive charts, dark theme presets) |
 | **Market Data** | [yfinance](https://pypi.org/project/yfinance/) (Live real-time prices & fundamentals) |
@@ -137,9 +140,29 @@ The complete documentation is also compiled in [`docs/methodology.md`](docs/meth
 | **Scientific Computing** | [NumPy](https://numpy.org/) & [Pandas](https://pandas.pydata.org/) |
 | **AI Analyst Copilot** | [Google Gemini 1.5 / 3 Flash](https://aistudio.google.com/app/apikey) via Unified `google-genai` SDK |
 | **Concurrency** | Python `concurrent.futures.ThreadPoolExecutor` |
-| **Automation** | GitHub Actions (`cron: '30 13 * * 1-5'`) & Slack Incoming Webhooks |
+| **Automation & CI/CD** | GitHub Actions (`cron: '30 13 * * 1-5'`), Slack Webhooks, Cloud Build |
 | **Containerization** | Docker multi-stage build (`python:3.11-slim`) |
-| **Cloud Hosting** | Streamlit Community Cloud & Google Cloud Run |
+| **Cloud Hosting** | Google Cloud Run (`agentichackathon-506620`) & Streamlit Cloud |
+
+---
+
+## ☁️ Google Cloud BigQuery Quant Lakehouse
+
+Inspired by modern data engineering architectures (GCS + BigQuery + Cloud Run), Macro Pulse decouples live presentation from market data ingestion using **Google BigQuery**:
+
+* **Project**: `agentichackathon-506620`
+* **Dataset**: `macropulse` (US Multi-region)
+* **Tables**:
+  * `macropulse.macro_factors`: Time-series partitioned daily by `date`, caching S&P 500, VIX, Treasury yields, credit spreads, and regime z-scores.
+  * `macropulse.quant_signals`: Pre-computed ATR%, 20d Realized Volatility, Bollinger Bandwidth, squeeze detection, and composite scores across the institutional watchlist.
+
+### Running the BigQuery ETL Pipeline
+Populate or refresh the data warehouse marts directly from the command line:
+```bash
+python scripts/gcp_etl_pipeline.py --project agentichackathon-506620 --dataset macropulse
+```
+Inside the dashboard, users can click **"☁️ Load from BigQuery Mart (<0.2s)"** to fetch pre-computed quant signals instantaneously without waiting for sequential HTTP scraping.
+
 
 ---
 

@@ -11,3 +11,6 @@ google-genai>=1.0.0
 python-dotenv>=1.0.0
 fredapi>=0.5.2
 pandas-datareader>=0.10.0
+google-cloud-bigquery>=3.20.0
+db-dtypes>=1.2.0
+

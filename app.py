@@ -82,6 +82,20 @@ except Exception as _e:
                             "JPM","BAC","XOM","CVX","JNJ","UNH","WMT","HD","PG")
     _import_errors["quant_signals"] = str(_e)
 
+try:
+    from src.bigquery_service import (
+        is_bigquery_available,
+        get_bq_status,
+        load_macro_from_bigquery,
+        save_macro_to_bigquery,
+        load_quant_signals_from_bigquery,
+        save_quant_signals_to_bigquery,
+    )
+    _BQ_OK = is_bigquery_available()
+except Exception as _e:
+    _BQ_OK = False
+    _import_errors["bigquery"] = str(_e)
+
 # ── Secrets ──────────────────────────────────────────────────────────
 def _get_fred_key():
     try:
@@ -299,7 +313,22 @@ def _try_load_fred_series(start_ts, end_ts):
 
 @st.cache_data(ttl=3600, show_spinner="📡 Fetching macro data…")
 def load_macro() -> pd.DataFrame:
-    """Pull S&P500, VIX, 10Y yield via yfinance. Falls back to demo data on failure."""
+    """Pull S&P500, VIX, 10Y yield via BigQuery or yfinance fallback."""
+    if _BQ_OK:
+        try:
+            bq_df = load_macro_from_bigquery()
+            if bq_df is not None and not bq_df.empty and len(bq_df) > 100:
+                if "regime" not in bq_df.columns or "regime_score" not in bq_df.columns:
+                    cs = (bq_df["credit_spread"] - bq_df["credit_spread"].mean()) / bq_df["credit_spread"].std()
+                    rv = (bq_df["realized_vol_12m"] - bq_df["realized_vol_12m"].mean()) / bq_df["realized_vol_12m"].std()
+                    bq_df["regime_score"] = cs.fillna(0) + rv.fillna(0)
+                    bq_df["regime"] = np.select([bq_df["regime_score"]<-0.5, bq_df["regime_score"]>0.5],
+                                              ["Risk-On 🟢","Risk-Off 🔴"], default="Neutral 🟡")
+                bq_df["_data_source"] = "GCP BigQuery"
+                return bq_df.dropna(subset=["sp500"])
+        except Exception:
+            pass
+
     tmap = {"sp500":"^GSPC","vix":"^VIX","dgs10":"^TNX","gold":"GLD","oil":"USO"}
     frames = {}
     for col, tkr in tmap.items():
@@ -357,7 +386,14 @@ def load_macro() -> pd.DataFrame:
     df["regime_score"] = cs.fillna(0) + rv.fillna(0)
     df["regime"] = np.select([df["regime_score"]<-0.5, df["regime_score"]>0.5],
                               ["Risk-On 🟢","Risk-Off 🔴"], default="Neutral 🟡")
+    df["_data_source"] = "Live yfinance"
+    if _BQ_OK:
+        try:
+            save_macro_to_bigquery(df)
+        except Exception:
+            pass
     return df.dropna(subset=["sp500"])
+
 
 @st.cache_data(ttl=300, show_spinner="📈 Computing indicators…")
 def fetch_stock(ticker: str, start: str, end: str):
@@ -603,10 +639,21 @@ with st.sidebar:
     mc_vol = st.slider("σ Annual (%)",     5, 40, 16)
     mc_n   = st.selectbox("Paths", [1000,5000,10000], index=1)
     st.markdown("---")
+    if _BQ_OK:
+        st.markdown("**☁️ GCP Data Lakehouse**")
+        bq_stat = get_bq_status()
+        if bq_stat.get("connected"):
+            st.success(f"**BigQuery**: Connected\n\nProject: `{bq_stat['project']}`")
+            if bq_stat.get("tables"):
+                st.caption(f"Active Marts: {', '.join(bq_stat['tables'])}")
+        else:
+            st.caption("BigQuery: Standby (local/fallback)")
+        st.markdown("---")
     if st.button("🔄 Reload Data"):
         st.cache_data.clear(); st.rerun()
-    st.markdown("<small style='color:#475569'>Data: yfinance<br>© 2025 HF Research</small>",
+    st.markdown("<small style='color:#475569'>Data: yfinance · FRED · BigQuery<br>© 2026 HF Research</small>",
                 unsafe_allow_html=True)
+
 
 # ══════════════════════════════════════════
 # LOAD DATA
@@ -2174,8 +2221,41 @@ with tab11:
             qs_period = st.selectbox("Lookback for indicators", ["6mo","1y","2y"], index=1, key="qs_period")
         qs_tickers = tuple(t.strip().upper() for t in qs_raw.split(",") if t.strip())[:40]
 
-        run_qs = st.button("⚡ Run Quant Scan", type="primary", key="qs_run")
-        qs_df = _cached_quant_scan(qs_tickers, qs_period) if run_qs else pd.DataFrame()
+        col_btn1, col_btn2 = st.columns([1, 1])
+        with col_btn1:
+            run_qs = st.button("⚡ Run Live Quant Scan", type="primary", key="qs_run")
+        with col_btn2:
+            load_bq = st.button("☁️ Load from BigQuery Mart (<0.2s)", key="qs_bq")
+
+        qs_df = pd.DataFrame()
+        if run_qs:
+            qs_df = _cached_quant_scan(qs_tickers, qs_period)
+            if _BQ_OK and not qs_df.empty:
+                try:
+                    save_quant_signals_to_bigquery(qs_df.rename(columns={
+                        "Ticker": "ticker", "Price": "price", "Signal": "signal",
+                        "Score": "score", "Vol Regime": "vol_regime",
+                        "Vol Breakout": "vol_breakout", "Reasons": "reasons",
+                        "_error": "error_message"
+                    }))
+                except Exception:
+                    pass
+        elif load_bq:
+            if _BQ_OK:
+                bq_signals = load_quant_signals_from_bigquery()
+                if bq_signals is not None and not bq_signals.empty:
+                    qs_df = bq_signals.rename(columns={
+                        "ticker": "Ticker", "price": "Price", "signal": "Signal",
+                        "score": "Score", "vol_regime": "Vol Regime",
+                        "vol_breakout": "Vol Breakout", "reasons": "Reasons",
+                        "error_message": "_error"
+                    })
+                    st.toast("⚡ Loaded instant quant mart from Google BigQuery!", icon="☁️")
+                else:
+                    st.warning("BigQuery quant mart empty. Click '⚡ Run Live Quant Scan' first.")
+            else:
+                st.info("BigQuery service not available in this environment.")
+
 
         if not qs_df.empty:
             ok = qs_df[qs_df["_error"].isna()]
