@@ -397,3 +397,39 @@ $$E_t = E_0 \cdot \exp\!\Bigl(\textstyle\sum_{s \le t} r^{\text{net}}_s\Bigr)$$
 * **Capacity** — AUM ceiling above which the strategy's own trades move prices against it.
 * **Factor crowding** — when a factor becomes consensus (post-publication), live Sharpe deteriorates toward 50 % of historical.
 * **Backtest overfitting** — searching enough strategies in-sample produces a great fit by chance; Bailey & López de Prado quantify this with the Probability of Backtest Overfitting (PBO).
+
+---
+
+## 🎯 Quant Signals — Methodology
+
+### How to read the charts
+
+* **Per-ticker table** — one row per watchlist name: signal label, additive score, volatility regime, and whether a volatility breakout is currently firing.
+* **Reasoning detail** — every point in the score is traced back to the indicator that produced it, in plain language.
+* **Bollinger chart** — the same price-vs-band view as the Technical tab, so a breakout call can be eyeballed against the bands that triggered it.
+
+### Mathematical formulation
+
+**Average True Range (14)** — the volatility unit, in price terms
+$$TR_t = \max(H_t - L_t,\ |H_t - C_{t-1}|,\ |L_t - C_{t-1}|), \qquad \text{ATR}_{14} = \frac{1}{14}\sum_{i=0}^{13} TR_{t-i}$$
+
+**Annualized realized volatility (20d)**
+$$\sigma^{ann}_t = \text{std}_{20}\bigl(\log(P_t/P_{t-1})\bigr) \cdot \sqrt{252}$$
+
+**Bollinger Band width + its own percentile rank** (the squeeze detector)
+$$\text{BBW}_t = \frac{\text{BB}_{upper,t} - \text{BB}_{lower,t}}{\text{SMA}_{20,t}}, \qquad \text{pct}_t = \frac{|\{s \le t : \text{BBW}_s \le \text{BBW}_t\}|}{252}$$
+
+**Volatility breakout condition** — squeeze roughly two weeks ago, expanding now, price outside the band
+$$\text{pct}_{t-10} \le 0.20 \ \wedge\ \text{BBW}_t > 1.15\cdot\text{BBW}_{t-5} \ \wedge\ (P_t > \text{BB}_{upper,t} \ \vee\ P_t < \text{BB}_{lower,t})$$
+
+**Composite score** — five bounded, signed components summed and clipped
+$$\text{score}_t = \text{clip}\Bigl(\textstyle\sum_k w_k \cdot \mathbf{1}[\text{condition}_k(t)],\ -100,\ 100\Bigr)$$
+
+### Hedge-fund terminology
+
+* **Volatility squeeze** — Bollinger Bands compressed to a low percentile of their own trailing range; energy coiling before a directional move, not a signal by itself.
+* **Volatility breakout** — the move that follows a squeeze once price closes outside the bands; this dashboard scores the breakout, not the squeeze.
+* **Realized vs. implied volatility** — this tab only uses realized (historical, backward-looking) volatility from price data; it does not use options-implied volatility.
+* **Conviction dampening** — reducing a score's magnitude (not flipping its sign) when the regime is noisy enough that the same signal is less trustworthy.
+* **Advisory signal** — a recommendation and its reasoning, with no order sizing, routing, or execution attached.
+

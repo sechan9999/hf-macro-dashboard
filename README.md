@@ -1,127 +1,219 @@
-Macro Pulse — AI-Powered Institutional Macro Stock Market Dashboard.
-
-Macro Pulse is a real-time, hedge fund-grade macro intelligence platform that combines quantitative financial modeling with Google Gemini AI to deliver institutional-quality investment analysis to anyone with a browser.
-
-💡 Inspiration In a world of "meme stocks" and noise, I noticed a gap between retail technical analysis (simple charts) and institutional macro-risk management. Most retail traders look at a 14-day RSI, while hedge funds look at Credit Spreads, Yield Curves, and Macro Regimes. I wanted to build a bridge—a tool that combines high-level economic data with granular technical signals to give a "full-spectrum" view of the US market.
-
-🎯 What It Does Most retail investors lack access to the same macro analytical tools used by hedge funds — regime classifiers, factor models, Monte Carlo risk engines, and AI analyst copilots. Macro Pulse bridges that gap by integrating 8 analytical modules into a single, free, live dashboard:
-
-Performance — Cumulative returns vs SPY benchmark, rolling drawdown, monthly return distribution, full tear sheet (Sharpe, Sortino, Calmar, Win Rate, Profit Factor)
-
-Macro & Rates — 10Y Treasury yield, credit spreads, yield curve slope, realized volatility (3M/12M) Regime Classification — Rule-based macro regime engine classifying markets into Risk-On / Neutral / Risk-Off using credit + volatility z-scores; per-regime Sharpe and win-rate statistics
-
-Expected Returns — Expanding-window Ridge Regression model trained live on yfinance macro data; outputs 12-month forward return estimates with ±1σ confidence bands and realized return overlay
-
-Stock Screener — Parallel multi-ticker screener using ThreadPoolExecutor (70% faster than sequential); real YTD calculation, RSI, SMA200 guard, CSV export
-
-Technical Analysis — Candlestick + SMA20/50/200, Bollinger Bands, VWAP, RSI, MACD, OBV, Rate-of-Change for any ticker with custom date range Risk Simulation — Monte Carlo engine (up to 10,000 paths), fan chart, VaR/CVaR table
-
-✨ Gemini AI Analyst — The core AI layer: feeds live macro data (regime score, yields, vol, drawdown, momentum) into Gemini 1.5 Flash via Google GenAI SDK and generates structured hedge fund-style briefings across 5 analysis modes: Full Macro Briefing, Regime Deep-Dive, Risk Assessment, Investment Outlook, and Custom Q&A
-
-🛠️ Technologies Used Layer Technology AI Model Google Gemini 1.5 Flash (Google GenAI SDK) Cloud Platform Google Cloud Run (serverless, auto-scaling) CI/CD Google Cloud Build + Artifact Registry Frontend Streamlit 1.32+ Data yfinance (live market data — no API key required) ML Engine scikit-learn Ridge Regression (expanding window cross-validation) Simulation NumPy Monte Carlo (10,000 paths) Visualization Plotly (interactive dark-theme charts) Concurrency Python ThreadPoolExecutor (parallel screener) Container Docker multi-stage build (python:3.11-slim)
-
-📡 Data Sources yfinance — S&P 500 (^GSPC), VIX (^VIX), 10Y Treasury (^TNX), Gold (GLD), Oil (USO), individual equities — all fetched in real-time, no API key required FRED API (optional) — Additional macro indicators (unemployment, CPI, credit spreads) when API key is provided Google Gemini 1.5 Flash — Language model for macro interpretation and investment insight generation
-
-🧠 How Gemini Is Used The Gemini AI Analyst tab is the project's centerpiece AI feature. It:
-
-Pulls live macro data from the dashboard (regime score, yields, volatility, drawdown, Sharpe, momentum signal) Constructs a structured financial context prompt Calls Gemini 1.5 Flash via google-generativeai SDK with a system instruction defining it as a "senior quantitative macro analyst" Returns formatted, institutional-quality analysis with specific positioning recommendations The model is given 5 analysis modes: Full Macro Briefing, Regime Deep-Dive, Risk Assessment, Investment Outlook, and Custom Question — making it a conversational, context-aware financial copilot.
-
-☁️ Google Cloud Deployment The app runs on Google Cloud Run with full automation:
-
-Dockerfile (multi-stage, python:3.11-slim, port 8080, health check)
-
-cloudbuild.yaml — CI/CD: GitHub push → Cloud Build → Artifact Registry → Cloud Run
-
-deploy_gcloud.ps1 — One-command Windows PowerShell deployment script using gcloud run deploy --source (no local Docker required) Live Cloud Run URL: https://macro-pulse-xu76sksloq-uc.a.run.app
-
-💡 Findings & Learnings Gemini as a financial analyst works remarkably well — with a well-structured macro context prompt and the right system instruction, Gemini 1.5 Flash produces analysis comparable to institutional research notes Regime classification gates everything — the Risk-On/Off signal materially changes asset allocation recommendations and monthly return distributions yfinance's fast_info vs info — switching to fast_info for screener reduced per-ticker latency by ~300ms; combined with ThreadPoolExecutor, screener performance improved ~70% Ridge regression on macro factors — even a simple expanding-window Ridge model using yield, credit, vol, and momentum as features captures meaningful equity return signal (directionally correct ~60% of months) Cloud Run + --source flag — deploying directly from source without local Docker via Cloud Build was a revelation for rapid iteration; zero local infrastructure required
-
-🔗 Links Live App (Streamlit Cloud): https://hf-macro-dashboard.streamlit.app Live App (Google Cloud Run): https://macro-pulse-xu76sksloq-uc.a.run.app GitHub Repository: https://github.com/sechan9999/hf-macro-dashboard
-
-# ⚡ Macro Pulse: NVDA Danger Zone & Micro Footprint
+# ⚡ Macro Pulse: Hedge Fund Multi-Factor Macro Dashboard & Quant Signals
 
 [![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://hf-macro-dashboard.streamlit.app/)
+[![Google Cloud Run](https://img.shields.io/badge/Google%20Cloud%20Run-Live-4285F4?logo=google-cloud&logoColor=white)](https://macro-pulse-xu76sksloq-uc.a.run.app)
+[![Daily Quant Signal](https://github.com/sechan9999/hf-macro-dashboard/actions/workflows/daily-quant-signal.yml/badge.svg)](https://github.com/sechan9999/hf-macro-dashboard/actions/workflows/daily-quant-signal.yml)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10%20%7C%203.11-blue.svg)](https://www.python.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-A professional-grade financial dashboard designed for institutional-level macro analysis and real-time monitoring of NVDA (NVIDIA) market structure risks.
+**Macro Pulse** is an institutional-grade financial intelligence and quantitative screening platform. It bridges the gap between retail technical indicators (simple 14-day RSI and moving averages) and hedge-fund macro risk management (credit spreads, yield-curve dynamics, regime-switching models, walk-forward strategy backtesting, and AI-driven macro commentary).
 
-## 🔥 Key Feature: NVDA Danger Zone & Micro Footprint
+Powered by **Streamlit**, **Plotly**, **yfinance**, **FRED**, **Scikit-learn**, and **Google Gemini AI**, Macro Pulse integrates 11 specialized analytical modules into a unified, free, real-time web dashboard.
 
-The latest update adds a specialized panel for deep-dive analysis of NVDA, the engine of the AI revolution.
+---
 
-- **Composite Danger Index**: A real-time risk score (0 to 1) integrating RSI extension, ATR volatility, relative volume surges, VIX levels, and price distance from the 50-day SMA.
-- **Micro Footprint Analysis**:
-    - **Block Trade Detection**: Tracks institutional-sized volume spikes (>2× avg).
-    - **Bid/Ask Imbalance Proxy**: Synthetic sentiment tracker measuring buyer dominance vs. seller supply.
-    - **Volatility Spike Alert**: Visual markers for abnormal price swings.
-- **Market Context**: Normalized performance comparison between NVDA and peers (SOXX, AMD, TSM, AVGO, MU).
-- **Strategy Hint Cards**: Actionable trading guides based on the current risk zone (Safe/Caution/Danger).
+## 🔗 Live Deployments
 
-## 🚀 Core Features
+* **Streamlit Community Cloud (Primary)**: [https://hf-macro-dashboard.streamlit.app/](https://hf-macro-dashboard.streamlit.app/)
+* **Google Cloud Run (Serverless)**: [https://macro-pulse-xu76sksloq-uc.a.run.app](https://macro-pulse-xu76sksloq-uc.a.run.app)
+* **GitHub Repository**: [https://github.com/sechan9999/hf-macro-dashboard](https://github.com/sechan9999/hf-macro-dashboard)
 
-- **Institution-Grade Macro Dashboard**: Monitor S&P 500, 10Y Yields, Credit Spreads, and the Yield Curve.
-- **Regime Classification**: GMM-modeled market states (Risk-On 🟢, Neutral 🟡, Risk-Off 🔴) to guide asset allocation.
-- **Expected Return Model**: Predictive 12-month returns using expanding-window Ridge regression on macro features.
-- **Monte Carlo Risk Sim**: Scenario testing with 5,000+ paths and VaR (Value at Risk) analysis.
-- **✨ Gemini AI Analyst**: Built-in senior hedge fund analyst powered by Google Gemini 3 Flash to interpret data and provide rigorous investment briefings.
+---
+
+## 🎯 11 Analytical Modules
+
+The platform is structured into 11 dedicated analytical tabs, each equipped with its own **"How to Read · Math · HF Terms"** institutional methodology expander:
+
+### 1. 📈 Performance & Benchmark Tear Sheet
+* **Cumulative Return (Base = 100)**: Strategy and S&P 500 total return tracked against the SPY ETF benchmark.
+* **Rolling Drawdown & Underwater Curve**: Visualizes peak-to-trough decline severity and recovery durations.
+* **Monthly Return Distributions**: Log-return histograms displaying skewness and tail-risk behavior.
+* **Full Hedge Fund Tear Sheet**: Sharpe Ratio, Sortino Ratio (downside risk only), Calmar Ratio, Maximum Drawdown (MDD), Win Rate, Profit Factor, Alpha, and Beta.
+
+### 2. 🌍 Macro & Rates
+* **10Y Treasury Yield (^TNX)**: The global discount rate driving equity duration and valuation multiples.
+* **Credit Spreads (BAA - AAA)**: Pulls real corporate credit spreads from FRED (or falls back to a deterministic 10Y proxy).
+* **Yield-Curve Slope (10Y - 2Y)**: Classic recession barometer tracking inversion and un-inversion phases.
+* **Realized Volatility Structure**: 3-Month vs. 12-Month realized volatility divergence indicating market regime stress.
+
+### 3. 🔍 Macro Regime Classification
+* Rule-based quantitative regime engine classifying broader market conditions into **Risk-On 🟢**, **Neutral 🟡**, or **Risk-Off 🔴**.
+* Driven by standardized z-scores of credit spreads and volatility dynamics.
+* Provides regime-conditional return distributions, Sharpe ratios, and historical win rates.
+
+### 4. 🤖 Expected Returns (Ridge Regression)
+* Expanding-window Ridge Regression trained live on historical macro features (interest rates, credit spreads, volatility, and momentum).
+* Forecasts 12-month forward equity returns with **±1σ confidence intervals** and realized historical overlay to assess predictive accuracy.
+
+### 5. 📊 High-Throughput Stock Screener
+* Multi-threaded screener utilizing Python's `ThreadPoolExecutor` for parallel data acquisition (~70% faster than sequential queries).
+* Computes real-time YTD performance, RSI(14), 200-day SMA trend alignment, and exportable CSV tables.
+
+### 6. 📉 Technical Analysis & Weekly Buy Zone Scanner
+* **Interactive Candlestick Workbench**: Dual moving averages (SMA 20/50/200), Bollinger Bands, VWAP, RSI, MACD, OBV, and Rate-of-Change.
+* **Weekly Buy Zone Scanner**: Multi-ticker institutional panel resampling daily data to weekly Friday closes across large caps (e.g., NVDA, MSFT, TSM, ASML, AMZN, GOOGL, AVGO, LLY, V, COST). Evaluates 20/50-week SMAs, 14-week RSI, and weekly MACD to classify tickers into *Strong Buy*, *Pullback*, *Trend Continuation*, or *Avoid (Extended)*.
+
+### 7. 🎲 Risk Simulation (Monte Carlo Engine)
+* Simulates 1,000 to 10,000 forward market paths using geometric Brownian motion and empirical bootstrap modes.
+* Interactive probability fan charts with parametric and empirical Value-at-Risk (**VaR 95% / 99%**) and Conditional Value-at-Risk (**CVaR / Expected Shortfall**).
+
+### 8. ✨ Gemini AI Macro Analyst
+* Ingests real-time dashboard data (macro regime scores, Treasury yields, credit spreads, drawdown metrics, volatility, momentum).
+* Powered by **Google Gemini 1.5 / 3 Flash** via the unified Google GenAI SDK.
+* Provides institutional briefings across 5 modes:
+  1. *Full Macro Briefing*
+  2. *Regime Deep-Dive*
+  3. *Risk Assessment & Tail-Risk Review*
+  4. *Tactical Investment Outlook*
+  5. *Custom Financial Analyst Q&A*
+
+### 9. 🔥 NVDA Danger Zone & Micro Footprint
+* Specialized single-name market structure risk monitor for NVIDIA (NVDA):
+  * **Composite Danger Index (0 to 1)**: Blends RSI extension, ATR volatility, relative volume surges, VIX levels, and 50-day SMA distance.
+  * **Micro Footprint Block Trade Detection**: Highlights institutional volume spikes (>2× 20-day average).
+  * **Synthetic Order-Flow Imbalance Proxy**: Evaluates buying dominance vs. aggressive supply.
+  * **Peer Group Benchmark**: Normalized performance overlay against semiconductor peers (SOXX, AMD, TSM, AVGO, MU).
+
+### 10. 📊 Walk-Forward Strategy Backtest
+* No-lookahead, walk-forward backtest of an SPY/Cash/Short allocation engine.
+* Configurable with three independent quantitative gates:
+  1. *Macro Regime Filter* (Hold long only when regime is not Risk-Off)
+  2. *12-1 Cross-Sectional / Time-Series Momentum* (Jegadeesh & Titman)
+  3. *Faber 10-Month Moving Average Rule*
+* Implements a strict $T+1$ execution lag (`.shift(1)`), linear transaction costs (default 5 bps turnover slippage), equity curves, and side-by-side strategy vs. buy-and-hold metrics.
+
+### 11. 🎯 Quant Signals & Volatility Breakouts
+* **Volatility-Aware Multi-Asset Screener**:
+  * **14-day ATR%**: Normalizes price volatility as a percentage of current price.
+  * **20-day Annualized Realized Volatility**: Historical standard deviation scaled to 252 trading days.
+  * **Bollinger Bandwidth Percentile (BBW %)**: Identifies volatility squeeze regimes (BBW in the lower 20th percentile over 252 days).
+  * **Volatility Breakout Detector**: Alerts when price pierces upper/lower Bollinger Bands following an expansion from a squeeze.
+  * **Additive Scoring Engine (-100 to +100)**: Translates trend, momentum, RSI, and volatility squeeze into actionable signals (*Strong Long*, *Long*, *Neutral*, *Short*, *Strong Short*).
+
+---
+
+## 🤖 Pre-Market Automation & Scheduled Scans
+
+Macro Pulse features headless alerting that runs outside the UI:
+
+### 1. Headless CLI Alert Runner
+Run scans from the terminal or pipe results directly into automated pipelines:
+```bash
+python scripts/daily_signal_alert.py \
+  --watchlist "NVDA,AAPL,MSFT,AMZN,GOOGL,META,TSLA,SPY,QQQ,IWM" \
+  --lookback 1y \
+  --min-score 25 \
+  --slack-webhook "https://hooks.slack.com/services/..."
+```
+
+### 2. GitHub Actions Scheduled Workflow
+The repository includes [`.github/workflows/daily-quant-signal.yml`](.github/workflows/daily-quant-signal.yml) configured to execute automatically every trading day at **13:30 UTC (9:30 AM ET pre-market)**:
+* Fetches the latest market closes.
+* Runs `scripts/daily_signal_alert.py` across core index ETFs and mega-cap tech.
+* Posts formatted markdown summaries directly to GitHub Workflow Summaries and optionally sends a Slack webhook alert.
+
+---
+
+## 📐 Mathematical Foundations & Methodology
+
+Every tab in the application includes an embedded **"📐 How to read this tab · Math · HF Terms"** expander that details:
+* Chart interpretation guidelines.
+* Formal mathematical formulas rendered via LaTeX/MathJax (e.g., Continuous Log Return compounding, Sharpe/Sortino ratios, GMM log-likelihood, Ridge objective function with L2 shrinkage, Bollinger Bandwidth, ATR).
+* Institutional hedge fund terminology (e.g., *Tear Sheet*, *High-Water Mark*, *Lookahead Bias*, *Gamma Squeeze*, *Order-Flow Imbalance*, *Capacity*, *PBO*).
+
+The complete documentation is also compiled in [`docs/methodology.md`](docs/methodology.md).
+
+---
 
 ## 🛠 Tech Stack
 
-- **Frontend**: [Streamlit](https://streamlit.io/)
-- **Visualizations**: [Plotly](https://plotly.com/python/)
-- **Data Source**: Live [Yahoo Finance](https://pypi.org/project/yfinance/) (no CSVs or FRED keys required for core functionality)
-- **Machine Learning**: [Scikit-learn](https://scikit-learn.org/)
-- **AI Engine**: [Google Gemini 3 Flash](https://aistudio.google.com/app/apikey) via Unified GenAI SDK
+| Layer | Technology |
+| :--- | :--- |
+| **Frontend UI** | [Streamlit](https://streamlit.io/) (Dark financial theme, custom CSS layout) |
+| **Data Visualization** | [Plotly](https://plotly.com/python/) (Interactive charts, dark theme presets) |
+| **Market Data** | [yfinance](https://pypi.org/project/yfinance/) (Live real-time prices & fundamentals) |
+| **Macro Data** | [FRED API](https://fred.stlouisfed.org/) via `pandas-datareader` / direct REST |
+| **Machine Learning** | [scikit-learn](https://scikit-learn.org/) (Expanding-window Ridge Regression, GMM) |
+| **Scientific Computing** | [NumPy](https://numpy.org/) & [Pandas](https://pandas.pydata.org/) |
+| **AI Analyst Copilot** | [Google Gemini 1.5 / 3 Flash](https://aistudio.google.com/app/apikey) via Unified `google-genai` SDK |
+| **Concurrency** | Python `concurrent.futures.ThreadPoolExecutor` |
+| **Automation** | GitHub Actions (`cron: '30 13 * * 1-5'`) & Slack Incoming Webhooks |
+| **Containerization** | Docker multi-stage build (`python:3.11-slim`) |
+| **Cloud Hosting** | Streamlit Community Cloud & Google Cloud Run |
+
+---
 
 ## 📋 Quick Start
 
 ### 1. Clone the repository
 ```bash
-git clone https://github.com/sechan9999/NVDAmacropulse.git
-cd NVDAmacropulse
+git clone https://github.com/sechan9999/hf-macro-dashboard.git
+cd hf-macro-dashboard
 ```
 
-### 2. Install dependencies
+### 2. Set up virtual environment
+```bash
+python -m venv venv
+# Windows:
+.\venv\Scripts\activate
+# macOS/Linux:
+source venv/bin/activate
+```
+
+### 3. Install dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Run the app
+### 4. Configure API Keys (Optional)
+Core market data and technical signals function out of the box without any API keys. To enable optional institutional features, configure your keys:
+
+Create `.streamlit/secrets.toml` or set environment variables:
+```toml
+# Google Gemini API key (enables the AI Analyst tab):
+GEMINI_API_KEY = "your_google_gemini_api_key_here"
+
+# FRED API key (enables live BAA-AAA credit spread & yield curve from St. Louis Fed):
+FRED_API_KEY = "your_fred_api_key_here"
+
+# Optional Slack webhook URL for automated daily signals:
+SLACK_WEBHOOK_URL = "https://hooks.slack.com/services/..."
+```
+
+### 5. Run the application
 ```bash
 streamlit run app.py
 ```
+Open [http://localhost:8501](http://localhost:8501) in your browser.
 
-## 🧠 AI Integration
+---
 
-To activate the **Gemini AI Analyst**, simply enter your [Gemini API Key](https://aistudio.google.com/app/apikey) in the sidebar. The analyst will ingest live macro data and providing rigorous, data-driven briefings.
+## ☁️ Google Cloud Run Deployment
 
-## 📊 Strategy Backtest tab (new)
+The application is containerized and ready for continuous deployment on Google Cloud Run:
 
-A walk-forward, no-lookahead backtest of an SPY/cash (optionally SPY/-SPY) strategy
-gated by three independently-toggleable signals:
+```bash
+# Deploy directly from source via Google Cloud CLI:
+gcloud run deploy macro-pulse \
+  --source . \
+  --platform managed \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --port 8080 \
+  --memory 2Gi
+```
 
-* **Regime filter** — long when macro regime is not `Risk-Off`
-* **12-1 Momentum** — long when 12m-minus-1m S&P log return is positive
-* **Faber 10-month SMA** — long when SPY > its 10-month moving average
-
-The aggregate signal score is the average of selected gates. The position is decided
-at month *T* and applied to the *T+1* return via `.shift(1)` to remove lookahead.
-Linear transaction costs (default 5 bps per unit turnover) and an optional short
-leg are configurable from the sidebar of the tab. The tab shows equity curves vs
-buy-and-hold, drawdowns, position-through-time, a side-by-side tear sheet
-(Sharpe, Sortino, Calmar, MDD, win rate, alpha), and a live signal snapshot for
-the most recent month.
-
-## 🌐 Real FRED data (optional)
-
-`load_macro` now pulls the real **BAA-AAA credit spread** and **T10Y2Y yield-curve
-slope** from FRED whenever a `FRED_API_KEY` environment variable / Streamlit secret
-is present, or when `pandas-datareader` can reach the public FRED endpoint. If both
-fail, the previous deterministic proxy is used and the tab footer reports which
-source is active. Set the key on Streamlit Cloud via *Settings → Secrets*:
-
-```toml
-FRED_API_KEY = "your_key_here"
+Alternatively, use the included PowerShell script for Windows:
+```powershell
+.\deploy_gcloud.ps1
 ```
 
 ---
-*© 2026 HF Research & Antigravity AI*
+
+## 📄 License
+
+Distributed under the **MIT License**. See `LICENSE` for more information.
+
+---
+
+*© 2026 HF Research & Antigravity AI — Built for institutional research and quantitative finance education.*
