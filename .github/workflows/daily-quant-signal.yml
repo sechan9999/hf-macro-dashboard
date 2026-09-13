@@ -1,0 +1,72 @@
+name: Daily Quant Signal Alert
+
+# Runs the volatility+technical signal scan every US trading weekday before
+# the open and publishes the result. GitHub-hosted runners have normal
+# internet access, so yfinance works here even in environments where it's
+# firewalled (e.g. some sandboxed dev containers).
+#
+# 12:00 UTC ≈ 08:00 ET (07:00 during EST, before DST) — adjust if you want
+# a different pre-market time; GitHub Actions cron is always UTC.
+on:
+  schedule:
+    - cron: "0 12 * * 1-5"
+  workflow_dispatch:      # lets you click "Run workflow" manually to test
+
+permissions:
+  contents: write   # only needed for the "commit snapshot" step below
+
+jobs:
+  quant-signal-alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pandas numpy yfinance
+
+      - name: Run quant signal scan
+        id: scan
+        run: |
+          python scripts/daily_signal_alert.py --period 1y --top 8 | tee signal_output.txt
+
+      - name: Publish to job summary
+        run: cat signal_output.txt >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Save dated snapshot to repo
+        run: |
+          mkdir -p signals
+          DATE=$(date -u +%Y-%m-%d)
+          cp signal_output.txt "signals/${DATE}.md"
+          cp signal_output.txt "signals/latest.md"
+
+      - name: Commit snapshot
+        run: |
+          git config user.name "macropulse-bot"
+          git config user.email "actions@github.com"
+          git add signals/
+          git diff --cached --quiet || git commit -m "chore(signals): daily quant signal snapshot $(date -u +%F)"
+          git push
+
+      # ── Optional real push notification — uncomment once you add a secret ──
+      # Slack: add a repo secret SLACK_WEBHOOK_URL (Slack → Incoming Webhooks),
+      # then uncomment this step for an actual notification instead of just
+      # a file in the repo / Actions tab.
+      #
+      # - name: Post to Slack
+      #   env:
+      #     SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      #   run: |
+      #     python - <<'PY'
+      #     import json, os, urllib.request
+      #     text = open("signal_output.txt", encoding="utf-8").read()
+      #     req = urllib.request.Request(
+      #         os.environ["SLACK_WEBHOOK_URL"],
+      #         data=json.dumps({"text": f"```{text}```"}).encode(),
+      #         headers={"Content-Type": "application/json"},
+      #     )
+      #     urllib.request.urlopen(req)
+      #     PY

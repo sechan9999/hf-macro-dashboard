@@ -73,6 +73,15 @@ except Exception as _e:
         return
     _import_errors["methodology"] = str(_e)
 
+try:
+    from src.quant_signals import run_quant_scan, DEFAULT_UNIVERSE as QS_DEFAULT_UNIVERSE
+    _QS_OK = True
+except Exception as _e:
+    _QS_OK = False
+    QS_DEFAULT_UNIVERSE = ("SPY","QQQ","IWM","GLD","TLT","AAPL","MSFT","NVDA","AMZN","GOOGL",
+                            "JPM","BAC","XOM","CVX","JNJ","UNH","WMT","HD","PG")
+    _import_errors["quant_signals"] = str(_e)
+
 # ── Secrets ──────────────────────────────────────────────────────────
 def _get_fred_key():
     try:
@@ -697,10 +706,10 @@ st.markdown("---")
 # ══════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════
-tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10 = st.tabs([
+tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10,tab11 = st.tabs([
     "📈 Performance","🌍 Macro & Rates","🔍 Regime","🤖 Expected Returns",
     "📊 Screener","📉 Technical","🎲 Risk Sim","✨ Gemini AI Analyst",
-    "🔥 NVDA Danger Zone","📊 Strategy Backtest"])
+    "🔥 NVDA Danger Zone","📊 Strategy Backtest","🎯 Quant Signals"])
 
 # ─── Tab 1: Performance ──────────────────────────────────────────────
 with tab1:
@@ -983,8 +992,7 @@ with tab5:
         # fix #19: custom ticker input
         custom_raw = st.text_input("Custom tickers (comma-separated)",
                                    placeholder="e.g. NVDA, META, TSLA")
-        default_universe = ("SPY","QQQ","IWM","GLD","TLT","AAPL","MSFT","NVDA","AMZN","GOOGL",
-                            "JPM","BAC","XOM","CVX","JNJ","UNH","WMT","HD","PG")
+        default_universe = QS_DEFAULT_UNIVERSE  # shared with the Quant Signals tab
         if custom_raw.strip():
             universe = tuple(t.strip().upper() for t in custom_raw.split(",") if t.strip())
         else:
@@ -2138,3 +2146,116 @@ with tab10:
 
         st.caption(f"Credit spread source: **{df['_credit_source'].iloc[-1] if '_credit_source' in df.columns else 'proxy'}**"
                    f" · Yield curve source: **{df['_slope_source'].iloc[-1] if '_slope_source' in df.columns else 'proxy'}**")
+
+# ─── Tab 11: Quant Signals (volatility-aware technical recommendations) ─────
+@st.cache_data(ttl=900, show_spinner="⚡ Scanning volatility + technical signals…")
+def _cached_quant_scan(tickers: tuple, period: str):
+    return run_quant_scan(tickers, period=period)
+
+with tab11:
+    render_methodology("quant_signals", st)
+    st.markdown("### 🎯 Quant Signals — Volatility-Aware Technical Recommendations")
+    st.caption(
+        "Rule-based BUY/SELL/HOLD recommendations with a transparent, additive score "
+        "(trend + MACD + RSI + volatility-breakout + volume). **Advisory only — this tab "
+        "never places an order.** Review the reasoning, then execute manually if you agree."
+    )
+
+    if not _QS_OK:
+        st.error(f"⚠️ Quant signal engine failed to load: {_import_errors.get('quant_signals')}")
+    else:
+        col_u, col_p = st.columns([3, 1])
+        with col_u:
+            qs_raw = st.text_input(
+                "Watchlist (comma-separated) — defaults to the same universe as the Screener tab",
+                ", ".join(QS_DEFAULT_UNIVERSE), key="qs_tickers",
+            )
+        with col_p:
+            qs_period = st.selectbox("Lookback for indicators", ["6mo","1y","2y"], index=1, key="qs_period")
+        qs_tickers = tuple(t.strip().upper() for t in qs_raw.split(",") if t.strip())[:40]
+
+        run_qs = st.button("⚡ Run Quant Scan", type="primary", key="qs_run")
+        qs_df = _cached_quant_scan(qs_tickers, qs_period) if run_qs else pd.DataFrame()
+
+        if not qs_df.empty:
+            ok = qs_df[qs_df["_error"].isna()]
+            bad = qs_df[qs_df["_error"].notna()]
+
+            # KPI row — signal distribution
+            counts = ok["Signal"].value_counts()
+            cs = st.columns(5)
+            cs[0].metric("🟢 STRONG BUY", int(counts.get("STRONG_BUY", 0)))
+            cs[1].metric("🟢 BUY",        int(counts.get("BUY", 0)))
+            cs[2].metric("⚪ HOLD",       int(counts.get("HOLD", 0)))
+            cs[3].metric("🔴 SELL",       int(counts.get("SELL", 0)))
+            cs[4].metric("🔴 STRONG SELL",int(counts.get("STRONG_SELL", 0)))
+
+            show = ok.drop(columns=["_error"]).copy()
+            show["Price"] = show["Price"].map(lambda v: f"${v:,.2f}" if pd.notna(v) else "—")
+            sig_colors = {"STRONG_BUY":"#34d399","BUY":"#6ee7b7","HOLD":"#94a3b8",
+                          "SELL":"#fca5a5","STRONG_SELL":"#f87171"}
+            def _color_signal(val):
+                return f"color:{sig_colors.get(val,'')}; font-weight:700"
+            styled = show.style.map(_color_signal, subset=["Signal"])
+            st.dataframe(styled, use_container_width=True, hide_index=True)
+
+            csv = ok.to_csv(index=False).encode()
+            st.download_button("⬇️ Export CSV", csv, "quant_signals.csv", "text/csv", key="qs_csv")
+
+            if not bad.empty:
+                with st.expander(f"⚠️ Skipped {len(bad)} ticker(s)"):
+                    st.dataframe(bad[["Ticker","_error"]], use_container_width=True, hide_index=True)
+
+            # ── Per-ticker reasoning + chart deep-dive ──
+            st.markdown("#### 🔍 Reasoning Detail")
+            pick = st.selectbox("Ticker", ok["Ticker"].tolist(), key="qs_pick") if not ok.empty else None
+            if pick:
+                row = ok[ok["Ticker"] == pick].iloc[0]
+                badge_color = sig_colors.get(row["Signal"], "#38bdf8")
+                st.markdown(f"""<div style="background:rgba(15,23,42,.6); border-left:4px solid {badge_color};
+                    border-radius:8px; padding:16px 20px; margin:10px 0;">
+                    <b style="color:{badge_color}; font-size:1.1rem;">{row['Ticker']} — {row['Signal']}</b>
+                    &nbsp;&nbsp;score {row['Score']:+d} &nbsp;|&nbsp; vol regime: {row['Vol Regime']}
+                    &nbsp;|&nbsp; breakout: {row['Vol Breakout']}
+                    <ul>{"".join(f"<li>{r}</li>" for r in str(row['Reasons']).split(" · "))}</ul>
+                    </div>""", unsafe_allow_html=True)
+
+                df_t2, _ = fetch_stock(pick, str(date.today().replace(year=date.today().year-1)), str(date.today()))
+                if df_t2 is not None and not df_t2.empty:
+                    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7,0.3], vertical_spacing=0.03)
+                    fig.add_trace(go.Candlestick(x=df_t2.index, open=df_t2["Open"], high=df_t2["High"],
+                                                 low=df_t2["Low"], close=df_t2["Close"], name="OHLC"), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=df_t2.index, y=df_t2["BB_upper"], line=dict(color="#818cf8",width=1,dash="dot"),
+                                             name="BB Upper"), row=1, col=1)
+                    fig.add_trace(go.Scatter(x=df_t2.index, y=df_t2["BB_lower"], line=dict(color="#818cf8",width=1,dash="dot"),
+                                             name="BB Lower", fill="tonexty", fillcolor="rgba(129,140,248,.05)"), row=1, col=1)
+                    fig.add_trace(go.Bar(x=df_t2.index, y=df_t2["Volume"], marker_color=df_t2["vol_color"].tolist(),
+                                         name="Volume", showlegend=False), row=2, col=1)
+                    fig.update_layout(title=f"{pick} — Price vs Bollinger Bands + Volume",
+                                      height=500, xaxis_rangeslider_visible=False, hovermode="x unified", **PT)
+                    update_axes(fig, "Date", "")
+                    st.plotly_chart(fig, use_container_width=True)
+        elif run_qs:
+            st.warning("No results — check tickers or try again.")
+
+        with st.expander("ℹ️ How the Quant Signal score works (and what it isn't)"):
+            st.markdown("""
+**Inputs.** Daily bars from yfinance. Five components are scored and summed:
+
+| Component | Range | Fires on |
+|---|---|---|
+| Trend alignment | ±25 | Price vs SMA20/50/200 stack order |
+| MACD momentum | ±15 | Histogram expanding in the trend's direction |
+| RSI mean-reversion | ±15 | RSI < 30 (oversold) or > 70 (overbought) |
+| **Volatility breakout** | ±20 | Bollinger-Band squeeze (width in its own bottom 20th percentile ~2 weeks ago) followed by a close outside the band — this is the "catch the volatility" signal |
+| Volume confirmation | ±10 | Volume > 1.5× its 20-day average, same direction as the day's move |
+
+An **Extreme** volatility regime (today's realized vol in the top 15% of its own trailing year) with *no* directional breakout halves the score — high chop without a clear breakout gets less conviction, not more.
+
+**Score → label**: ≥ 40 STRONG_BUY · ≥ 15 BUY · −14…14 HOLD · ≤ −15 SELL · ≤ −40 STRONG_SELL.
+
+**Caveats.**
+* Rule-based and deterministic — no news, earnings, fundamentals, or macro regime input. Cross-check the *Macro & Rates* and *Regime* tabs.
+* Volatility regime and breakout detection need ~1 year of history; short lookbacks degrade quality.
+* **Not investment advice, and this tool does not place orders.** It only proposes a direction and shows its reasoning — you decide, size, and execute.
+            """)
