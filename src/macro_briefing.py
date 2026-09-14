@@ -27,9 +27,34 @@ except Exception:
     genai_types = None
     _GENAI_OK = False
 
+try:
+    import boto3
+    _BOTO3_OK = True
+except Exception:
+    boto3 = None
+    _BOTO3_OK = False
+
 from src.macro_data import load_macro, load_spy, compute_hf_metrics
 
-GEMINI_MODEL = "gemini-2.0-flash"
+# NOTE: app.py's live Tab 8 still hard-codes "gemini-2.0-flash", which
+# Google's API now rejects with a 404 pointing at this model instead
+# (confirmed live during testing on 2026-09-14) — the deployed dashboard's
+# Gemini tab is likely broken until that's updated too.
+GEMINI_MODEL = "gemini-3.6-flash"
+
+# Amazon Nova Pro — Amazon's own foundation model on Bedrock, generally
+# available without the per-model access request some third-party Bedrock
+# models (e.g. Anthropic Claude) need in a fresh AWS account. Override via
+# BEDROCK_MODEL_ID if you've enabled a different model in your account.
+BEDROCK_DEFAULT_MODEL = "amazon.nova-pro-v1:0"
+
+PROVIDERS = ("gemini", "bedrock")
+
+SYSTEM_INSTRUCTION = (
+    "You are a senior quantitative macro analyst at a leading hedge fund. "
+    "Your analysis is precise, data-driven, and actionable. "
+    "You interpret financial data with institutional rigor."
+)
 
 ANALYSIS_TYPES = (
     "Full Macro Briefing",
@@ -42,6 +67,29 @@ ANALYSIS_TYPES = (
 
 def _get_gemini_key() -> Optional[str]:
     return os.environ.get("GEMINI_API_KEY")
+
+
+def _call_gemini(prompt: str, api_key: str) -> str:
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+        config=genai_types.GenerateContentConfig(system_instruction=SYSTEM_INSTRUCTION),
+    )
+    return response.text
+
+
+def _call_bedrock(prompt: str, model_id: Optional[str] = None, region: Optional[str] = None) -> str:
+    """Call Amazon Bedrock's unified Converse API. Uses the standard AWS
+    credential chain (env vars, ~/.aws/credentials, or an IAM role) — no
+    key is threaded through by hand the way the Gemini path does."""
+    client = boto3.client("bedrock-runtime", region_name=region or os.environ.get("AWS_REGION", "us-east-1"))
+    response = client.converse(
+        modelId=model_id or os.environ.get("BEDROCK_MODEL_ID", BEDROCK_DEFAULT_MODEL),
+        system=[{"text": SYSTEM_INSTRUCTION}],
+        messages=[{"role": "user", "content": [{"text": prompt}]}],
+    )
+    return response["output"]["message"]["content"][0]["text"]
 
 
 def build_macro_context(df: pd.DataFrame, m: dict, ytd: float, d_start, d_end) -> str:
@@ -157,25 +205,24 @@ def _load_dashboard_state(d_start: Optional[str] = None, d_end: Optional[str] = 
 
 def generate_briefing(analysis_type: str, custom_question: str = "",
                        d_start: Optional[str] = None, d_end: Optional[str] = None,
-                       api_key: Optional[str] = None) -> dict:
+                       api_key: Optional[str] = None, provider: str = "gemini") -> dict:
     """
     Run the full Tab-8 pipeline headlessly: load data, build context,
-    build the prompt, call Gemini, return the analysis.
+    build the prompt, call the chosen LLM provider, return the analysis.
 
-    Returns {"text": str} on success, {"error": str} on failure — never
+    provider: "gemini" (default, matches the live dashboard's Tab 8 exactly)
+              or "bedrock" (Amazon Bedrock via boto3 — AWS Builder mini
+              challenge integration; uses the standard AWS credential chain).
+
+    Returns {"text": str, ...} on success, {"error": str} on failure — never
     raises, so MCP tool callers get a clean structured result either way.
     """
     if analysis_type not in ANALYSIS_TYPES:
         return {"error": f"Unknown analysis_type {analysis_type!r}. Choose one of {ANALYSIS_TYPES}."}
     if analysis_type == "Custom Question" and not custom_question.strip():
         return {"error": "custom_question is required when analysis_type is 'Custom Question'."}
-
-    if not _GENAI_OK:
-        return {"error": "google-genai package is not installed."}
-
-    key = api_key or _get_gemini_key()
-    if not key:
-        return {"error": "No Gemini API key configured (set GEMINI_API_KEY)."}
+    if provider not in PROVIDERS:
+        return {"error": f"Unknown provider {provider!r}. Choose one of {PROVIDERS}."}
 
     try:
         df, m, ytd, d_start, d_end = _load_dashboard_state(d_start, d_end)
@@ -185,25 +232,31 @@ def generate_briefing(analysis_type: str, custom_question: str = "",
     macro_context = build_macro_context(df, m, ytd, d_start, d_end)
     prompt = build_prompt(analysis_type, macro_context, df.iloc[-1], m, custom_question)
 
-    try:
-        client = genai.Client(api_key=key)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=prompt,
-            config=genai_types.GenerateContentConfig(
-                system_instruction=(
-                    "You are a senior quantitative macro analyst at a leading hedge fund. "
-                    "Your analysis is precise, data-driven, and actionable. "
-                    "You interpret financial data with institutional rigor."
-                )
-            ),
-        )
-    except Exception as e:
-        return {"error": f"Gemini API error: {e}"}
+    if provider == "bedrock":
+        if not _BOTO3_OK:
+            return {"error": "boto3 package is not installed."}
+        model_id = os.environ.get("BEDROCK_MODEL_ID", BEDROCK_DEFAULT_MODEL)
+        try:
+            text = _call_bedrock(prompt, model_id=model_id)
+        except Exception as e:
+            return {"error": f"Bedrock error: {e}"}
+        model_used = model_id
+    else:
+        if not _GENAI_OK:
+            return {"error": "google-genai package is not installed."}
+        key = api_key or _get_gemini_key()
+        if not key:
+            return {"error": "No Gemini API key configured (set GEMINI_API_KEY)."}
+        try:
+            text = _call_gemini(prompt, key)
+        except Exception as e:
+            return {"error": f"Gemini API error: {e}"}
+        model_used = GEMINI_MODEL
 
     return {
-        "text": response.text,
-        "model": GEMINI_MODEL,
+        "text": text,
+        "provider": provider,
+        "model": model_used,
         "as_of": df.index[-1].strftime("%Y-%m-%d"),
         "regime": df["regime"].iloc[-1],
     }

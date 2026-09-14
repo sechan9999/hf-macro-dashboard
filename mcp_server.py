@@ -155,13 +155,16 @@ def get_risk_metrics(start: str = "", end: str = "") -> dict:
 
 
 @mcp.tool()
-def get_macro_briefing(analysis_type: str = "Full Macro Briefing", custom_question: str = "") -> dict:
+def get_macro_briefing(analysis_type: str = "Full Macro Briefing", custom_question: str = "",
+                        provider: str = "gemini") -> dict:
     """Get an AI-generated hedge-fund-style macro briefing grounded in the
     live dashboard data. analysis_type must be one of: 'Full Macro
     Briefing', 'Regime Deep-Dive', 'Risk Assessment', 'Investment Outlook',
-    or 'Custom Question' (pass your question in custom_question). Requires
-    GEMINI_API_KEY to be configured on the server."""
-    return generate_briefing(analysis_type=analysis_type, custom_question=custom_question)
+    or 'Custom Question' (pass your question in custom_question).
+    provider is 'gemini' (default, requires GEMINI_API_KEY) or 'bedrock'
+    (Amazon Bedrock — Amazon Nova Pro by default, requires AWS credentials
+    configured on the server via the standard AWS credential chain)."""
+    return generate_briefing(analysis_type=analysis_type, custom_question=custom_question, provider=provider)
 
 
 if __name__ == "__main__":
