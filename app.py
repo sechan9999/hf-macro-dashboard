@@ -783,11 +783,15 @@ st.markdown("---")
 # ══════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════
-tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10,tab11,tab12,tab13 = st.tabs([
+if st.query_params.get("ticker"):
+    st.info(f"📑 Equity report for **{st.query_params['ticker'].upper()}** is being built in the "
+            "**📑 Equity Report** tab (last tab).")
+
+tab1,tab2,tab3,tab4,tab5,tab6,tab7,tab8,tab9,tab10,tab11,tab12,tab13,tab14 = st.tabs([
     "📈 Performance","🌍 Macro & Rates","🔍 Regime","🤖 Expected Returns",
     "📊 Screener","📉 Technical","🎲 Risk Sim","✨ AI Analyst",
     "🔥 NVDA Danger Zone","📊 Strategy Backtest","🎯 Quant Signals","🎙️ Alexa+ Copilot",
-    "🏦 Multi-Asset Sync & FOMC Shock"])
+    "🏦 Multi-Asset Sync & FOMC Shock","📑 Equity Report"])
 
 # ─── Tab 1: Performance ──────────────────────────────────────────────
 with tab1:
@@ -1219,11 +1223,18 @@ with tab6:
             show["_ord"] = show["Zone"].map(zone_order).fillna(9)
             show = show.sort_values(["_ord","RSI(W)"]).drop(columns=["_ord"])
             show = show[display_cols]
+            # 📑 one click from a scanner row to the full equity report (?ticker= deep link auto-generates it)
+            from src.equity_report.engine.analysis import report_url
+            show["Report"]      = show["Ticker"].map(report_url)
             show["Price"]       = show["Price"].map(lambda v: f"${v:,.2f}")
             show["MA20W"]       = show["MA20W"].map(lambda v: f"${v:,.2f}")
             show["MA50W"]       = show["MA50W"].map(lambda v: f"${v:,.2f}")
             show["MA20 dist %"] = show["MA20 dist %"].map(lambda v: f"{v:+.1f}%")
-            st.dataframe(show, use_container_width=True, hide_index=True)
+            st.dataframe(show, use_container_width=True, hide_index=True, column_config={
+                "Report": st.column_config.LinkColumn(
+                    "📑 Report", display_text="Equity report ↗",
+                    help="Opens the app with ?ticker=… — the 📑 Equity Report tab builds the DCF / Excel / Word pack "
+                         "(US 10-K filers only; ETFs and 20-F filers such as TSM/ASML are refused)")})
 
             st.download_button(
                 "📥 Export buy-zone scan to CSV",
@@ -2525,7 +2536,7 @@ with tab12:
       </div>
       <div style="display:flex; align-items:center; gap: 8px;">
         <b style="color:#f8fafc; font-size:0.9rem;">Tools Registered:</b>
-        <span style="background:rgba(56,189,248,0.15); color:#38bdf8; padding:2px 8px; border-radius:4px; font-weight:600; font-size:0.8rem;">7 Active</span>
+        <span style="background:rgba(56,189,248,0.15); color:#38bdf8; padding:2px 8px; border-radius:4px; font-weight:600; font-size:0.8rem;">8 Active</span>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -2542,7 +2553,7 @@ with tab12:
     st.markdown("#### 🗣️ Spoken Voice Prompt Simulation")
     st.caption("Click a preset voice invocation or type a custom command as if speaking to Alexa+ on your Echo or Fire TV:")
 
-    col_p1, col_p2, col_p3, col_p4, col_p5 = st.columns(5)
+    col_p1, col_p2, col_p3, col_p4, col_p5, col_p6 = st.columns(6)
     preset_prompt = None
 
     with col_p1:
@@ -2560,6 +2571,9 @@ with tab12:
     with col_p5:
         if st.button("⚡ 'Vol Breakout'", use_container_width=True):
             preset_prompt = "Alexa, scan volatility squeeze breakouts on SPY"
+    with col_p6:
+        if st.button("📑 'AAPL Report'", use_container_width=True):
+            preset_prompt = "Alexa, give me an equity report on AAPL"
 
     # Input prompt text
     default_text = preset_prompt if preset_prompt else "Alexa, what is today's market regime?"
@@ -2642,6 +2656,19 @@ with tab12:
                 b_cols = st.columns(len(badges))
                 for idx, badge in enumerate(badges):
                     b_cols[idx].metric(badge["label"], badge["value"])
+
+        # ── 2b. Equity report downloads (same engine + files as the 📑 Equity Report tab) ──
+        if res.get("tool_selected") == "get_equity_report" and res.get("status") == "success":
+            try:
+                from src.equity_report.ui import download_row, generate, market_view, regime_inputs
+                _t = res["tool_args"].get("ticker", "AAPL")
+                _reg, _rf, _src = regime_inputs(df)
+                with st.spinner(f"Rendering the {_t} Excel / Word / dashboard files…"):
+                    _er = generate(st, _t, _reg, _src, _rf, market=market_view(df_raw))
+                st.markdown(f"**📑 {_t} research pack** — same files as the Equity Report tab:")
+                download_row(st, _er, "alexa_er")
+            except Exception as _e:
+                st.info(f"Report files unavailable: {_e}")
 
         # ── 3. APL Fire TV Inspector ──
         if "apl_document" in res:
@@ -2931,3 +2958,11 @@ with tab13:
         st.dataframe(df_fomc, use_container_width=True, hide_index=True)
 
 
+# ─── Tab 14: Equity Report (ticker -> Excel model, Word note, DCF dashboard) ──
+with tab14:
+    render_methodology("equity_report", st)
+    try:
+        from src.equity_report.ui import render_tab as render_equity_report
+        render_equity_report(st, components, df, df_raw)
+    except Exception as e:
+        st.error(f"Equity Report failed to load: {e}")
