@@ -2560,8 +2560,17 @@ with tab12:
         if st.button("🌅 'Morning Brief'", use_container_width=True):
             preset_prompt = "Alexa, ask MacroPulse for my morning brief"
 
+    # A preset click must land in the text input. Streamlit preserves a widget's
+    # value in session_state once created, so the value= argument is ignored on
+    # later runs — without this write, Dispatch keeps sending the stale query no
+    # matter which preset was clicked (only the first-loaded text ever ran).
+    # Verified 2026-10-14 with streamlit AppTest (old pattern kept 'DEFAULT',
+    # this pattern updates to the clicked preset).
+    if preset_prompt:
+        st.session_state["alexa_prompt_input"] = preset_prompt
+
     # Input prompt text
-    default_text = preset_prompt if preset_prompt else "Alexa, what is today's market regime?"
+    default_text = st.session_state.get("alexa_prompt_input", "Alexa, what is today's market regime?")
     user_query = st.text_input("Spoken Voice Input:", value=default_text, key="alexa_prompt_input")
 
     col_btn, col_empty = st.columns([1, 4])
