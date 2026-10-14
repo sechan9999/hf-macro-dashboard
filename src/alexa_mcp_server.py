@@ -702,7 +702,9 @@ def execute_get_morning_brief() -> Dict[str, Any]:
 
     close, change_pct, as_of = None, None, None
     try:
-        raw = _cached_download("^GSPC", "max", timeout=15)
+        # Only the last two closes are needed: "5d" instead of "max" (the full
+        # multi-decade history) — same answer, far faster on a cold cache.
+        raw = _cached_download("^GSPC", "5d", timeout=15)
         c = raw["Close"] if "Close" in raw.columns else raw.iloc[:, 0]
         if isinstance(c, pd.DataFrame):
             c = c.iloc[:, 0]

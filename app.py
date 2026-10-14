@@ -2578,7 +2578,8 @@ with tab12:
         run_query = st.button("🎙️ Dispatch to Alexa+", type="primary", use_container_width=True)
 
     if (run_query or preset_prompt) and _SKILL_OK:
-        with st.spinner("⚡ Alexa+ querying MacroPulse MCP tools over Streamable HTTP..."):
+        with st.spinner("⚡ Alexa+ querying MacroPulse MCP tools over Streamable HTTP... "
+                        "(live market data refreshes every few minutes — a cold fetch can take ~20s)"):
             res = AlexaMacroSkill.execute(user_query)
 
         # ── 1. Spoken Audio Voice Response Box ──
